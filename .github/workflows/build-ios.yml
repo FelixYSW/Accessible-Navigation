@@ -154,6 +154,15 @@ jobs:
       - name: Build Xcode archive (unsigned)
         run: |
           set -o pipefail
+          
+          echo "Resolving Swift Package Manager dependencies..."
+          xcodebuild -resolvePackageDependencies \
+            -workspace "${{ env.XCODE_WORKSPACE }}" \
+            -scheme "${{ env.XCODE_SCHEME }}" \
+            -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
+            
+          echo "Archiving workspace..."
+          set -o pipefail
           xcodebuild archive \
             -workspace "${{ env.XCODE_WORKSPACE }}" \
             -scheme     "${{ env.XCODE_SCHEME }}" \
