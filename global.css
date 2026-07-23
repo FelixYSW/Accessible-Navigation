@@ -1,0 +1,5 @@
+/* global.css — Required by NativeWind v4 as the single CSS entry point.
+   Metro compiles this via PostCSS/Tailwind and injects utilities into JS. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

@@ -1,0 +1,36 @@
+# Accessible Navigation FYP — .gitignore
+
+# Expo / Metro
+.expo/
+dist/
+web-build/
+*.orig.*
+
+# Node
+node_modules/
+
+# CocoaPods generated (keep Podfile and Podfile.lock, ignore build artefacts)
+ios/Pods/
+ios/build/
+ios/DerivedData/
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+
+# Environment — NEVER commit real keys
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/
+
+# CI artifacts
+*.ipa
+Payload/

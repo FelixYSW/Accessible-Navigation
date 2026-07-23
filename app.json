@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "AccessibleNav",
+    "slug": "accessible-nav",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios"],
+    "ios": {
+      "bundleIdentifier": "com.fypnav.accessiblenav",
+      "supportsTablet": false,
+      "deploymentTarget": "16.0",
+      "infoPlist": {
+        "NSCameraUsageDescription": "AccessibleNav uses the camera to detect hazards in your path and display augmented reality navigation overlays.",
+        "NSLocationWhenInUseUsageDescription": "AccessibleNav uses your location to provide turn-by-turn walking directions to your destination.",
+        "NSMicrophoneUsageDescription": "AccessibleNav may use the microphone in conjunction with camera features.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "AccessibleNav uses your location to calculate and update walking routes in real time."
+      }
+    },
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-router",
+      "expo-location",
+      "expo-speech",
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "AccessibleNav needs camera access for hazard detection and AR overlays.",
+          "enableFrameProcessors": true,
+          "disableVideoRecording": true
+        }
+      ],
+      [
+        "react-native-maps",
+        {
+          "useGoogleMapsOnAndroid": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "scheme": "accessible-nav"
+  }
+}
