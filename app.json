@@ -9,7 +9,7 @@
     "ios": {
       "bundleIdentifier": "com.fypnav.accessiblenav",
       "supportsTablet": false,
-      "deploymentTarget": "16.0",
+      "deploymentTarget": "16.4",
       "infoPlist": {
         "NSCameraUsageDescription": "AccessibleNav uses the camera to detect hazards in your path and display augmented reality navigation overlays.",
         "NSLocationWhenInUseUsageDescription": "AccessibleNav uses your location to provide turn-by-turn walking directions to your destination.",
