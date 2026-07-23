@@ -264,7 +264,7 @@ const styles = StyleSheet.create({
   },
   // Red flash overlay for hazard detection feedback
   hazardFlash: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#ef4444',
   },
   // AR overlay pill at the top of the camera view
