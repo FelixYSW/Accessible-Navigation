@@ -54,8 +54,10 @@ jobs:
           fetch-depth: 1        # Shallow clone for speed
 
       # ── 2. Select Xcode version ──────────────────────────────────────────
-      - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+      # macos-14 runner ships with Xcode 15.4 as the latest available version.
+      # See: https://github.com/actions/runner-images/blob/main/images/macos/macos-14-Readme.md
+      - name: Select Xcode 15.4
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
       # ── 3. Set up Node.js with npm cache ─────────────────────────────────
       #    actions/setup-node built-in cache handles ~/.npm for us.
