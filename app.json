@@ -28,12 +28,6 @@
           "enableFrameProcessors": true,
           "disableVideoRecording": true
         }
-      ],
-      [
-        "react-native-maps",
-        {
-          "useGoogleMapsOnAndroid": false
-        }
       ]
     ],
     "experiments": {
