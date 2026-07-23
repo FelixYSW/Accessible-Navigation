@@ -63,6 +63,10 @@ jobs:
       - name: Select latest Xcode 16
         run: |
           XCODE=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 16.x found on runner"
+            exit 1
+          fi
           echo "Using Xcode at: $XCODE"
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
@@ -163,8 +167,7 @@ jobs:
           xcodebuild -resolvePackageDependencies \
             -workspace "${{ env.XCODE_WORKSPACE }}" \
             -scheme "${{ env.XCODE_SCHEME }}" \
-            -derivedDataPath "${{ env.DERIVED_DATA_PATH }}" \
-            -clonedSourcePackagesDirPath "${{ runner.temp }}/spm"
+            -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
             
           echo "Archiving workspace..."
           set -o pipefail
@@ -174,17 +177,20 @@ jobs:
             -configuration Release \
             -archivePath "${{ env.ARCHIVE_PATH }}" \
             -derivedDataPath "${{ env.DERIVED_DATA_PATH }}" \
-            -clonedSourcePackagesDirPath "${{ runner.temp }}/spm" \
+            -disableAutomaticPackageResolution \
             -destination "generic/platform=iOS" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
             PROVISIONING_PROFILE="" \
-            | xcbeautify --quiet 2>/dev/null || true
+            2>&1 | tee build.log | xcbeautify --quiet 2>/dev/null || true
 
           # xcbeautify may not be installed; fall back to raw output if so.
           if [ ! -d "${{ env.ARCHIVE_PATH }}" ]; then
             echo "::error::Archive not found at ${{ env.ARCHIVE_PATH }}"
+            echo "::group::Raw Build Output"
+            tail -n 200 build.log
+            echo "::endgroup::"
             exit 1
           fi
           echo "✅ Archive created at ${{ env.ARCHIVE_PATH }}"
