@@ -13,6 +13,7 @@
   "dependencies": {
     "@gorhom/bottom-sheet": "^5.0.0",
     "expo": "~57.0.0",
+    "expo-modules-core": "*",
     "expo-location": "~18.1.0",
     "expo-router": "~4.0.0",
     "expo-speech": "~13.1.0",
