@@ -155,11 +155,16 @@ jobs:
         run: |
           set -o pipefail
           
+          echo "Clearing global SPM caches to prevent Xcode 16 corruption..."
+          rm -rf ~/Library/Caches/org.swift.swiftpm
+          rm -rf ~/Library/org.swift.swiftpm
+          
           echo "Resolving Swift Package Manager dependencies..."
           xcodebuild -resolvePackageDependencies \
             -workspace "${{ env.XCODE_WORKSPACE }}" \
             -scheme "${{ env.XCODE_SCHEME }}" \
-            -derivedDataPath "${{ env.DERIVED_DATA_PATH }}"
+            -derivedDataPath "${{ env.DERIVED_DATA_PATH }}" \
+            -clonedSourcePackagesDirPath "${{ runner.temp }}/spm"
             
           echo "Archiving workspace..."
           set -o pipefail
@@ -169,6 +174,7 @@ jobs:
             -configuration Release \
             -archivePath "${{ env.ARCHIVE_PATH }}" \
             -derivedDataPath "${{ env.DERIVED_DATA_PATH }}" \
+            -clonedSourcePackagesDirPath "${{ runner.temp }}/spm" \
             -destination "generic/platform=iOS" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
