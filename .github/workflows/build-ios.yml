@@ -121,9 +121,9 @@ jobs:
             ~/.cocoapods
             ~/Library/Caches/CocoaPods
             ios/Pods
-          key: cocoapods-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          key: cocoapods-xcode16-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            cocoapods-${{ runner.os }}-
+            cocoapods-xcode16-${{ runner.os }}-
 
       # ── 7. Install CocoaPods ─────────────────────────────────────────────
       #    Skip `pod install` if cache was a perfect hit to save ~2-4 min.
@@ -143,9 +143,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.DERIVED_DATA_PATH }}
-          key: derived-data-${{ runner.os }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx', 'ios/**/*.swift', 'ios/**/*.m', 'ios/**/*.h') }}
+          key: derived-data-xcode16-${{ runner.os }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx', 'ios/**/*.swift', 'ios/**/*.m', 'ios/**/*.h') }}
           restore-keys: |
-            derived-data-${{ runner.os }}-
+            derived-data-xcode16-${{ runner.os }}-
 
       # ── 9. Build archive (unsigned, no code signing) ─────────────────────
       #    CODE_SIGNING_ALLOWED=NO and CODE_SIGN_IDENTITY="" tell Xcode to
