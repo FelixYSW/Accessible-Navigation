@@ -1,0 +1,92 @@
+name: Build iOS IPA
+
+# Builds an unsigned .ipa on a GitHub-hosted macOS runner (since local
+# development happens on hardware too old to run modern Xcode) and uploads
+# it as a downloadable workflow artifact. GitHub automatically wraps the
+# uploaded .ipa in a .zip when you download it from the Actions run page.
+#
+# The .ipa is intentionally unsigned (CODE_SIGNING_ALLOWED=NO): it is meant
+# to be sideloaded with Sideloadly, which re-signs it locally using your own
+# free Apple ID at install time. No Apple Developer Program membership or
+# Expo account is required for this workflow.
+#
+# Required repository secret:
+#   GOOGLE_MAPS_API_KEY - a Google Maps API key with the Places API and
+#   Directions API enabled, used for macro-navigation routing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Generate native iOS project (expo prebuild)
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios
+        run: pod install
+
+      - name: Build unsigned app for device
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace AccessibleNavigation.xcworkspace \
+            -scheme AccessibleNavigation \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build
+
+      - name: Package .ipa
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          APP_PATH="build/Build/Products/Release-iphoneos/AccessibleNavigation.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::Could not find built .app at $APP_PATH"
+            find build/Build/Products -maxdepth 2 || true
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          mkdir -p ../dist
+          zip -r -y -q ../dist/AccessibleNavigation.ipa Payload
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AccessibleNavigation-ipa
+          path: dist/AccessibleNavigation.ipa
+          retention-days: 14
+          if-no-files-found: error
