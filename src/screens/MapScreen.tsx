@@ -302,7 +302,14 @@ export function MapScreen({ navigation }: Props) {
               anchor={{ x: 0.5, y: 0.5 }}
               onPress={() => setSelectedRouteIndex(index)}
             >
-              <View style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}>
+              {/* collapsable={false} keeps this View in the native hierarchy -
+                  without it, RN's view-flattening optimization can strip a
+                  plain style-only View out entirely, leaving react-native-maps
+                  nothing to snapshot and rendering the marker blank. */}
+              <View
+                collapsable={false}
+                style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}
+              >
                 <Text style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}>
                   {formatDuration(r.durationSeconds)}
                 </Text>
@@ -326,21 +333,23 @@ export function MapScreen({ navigation }: Props) {
           onSubmitEditing={handleSearch}
           returnKeyType="search"
         />
-        {loading ? (
-          <ActivityIndicator style={styles.inputAccessory} color={ROUTE_COLORS.selected.fill} />
-        ) : (
-          query.length > 0 && (
-            <Pressable
-              style={[styles.clearButton, styles.inputAccessory]}
-              onPress={handleClear}
-              accessibilityLabel="Clear search"
-              accessibilityRole="button"
-              hitSlop={8}
-            >
-              <Text style={styles.clearButtonText}>✕</Text>
-            </Pressable>
-          )
-        )}
+        <View style={styles.inputAccessory} pointerEvents="box-none">
+          {loading ? (
+            <ActivityIndicator color={ROUTE_COLORS.selected.fill} />
+          ) : (
+            query.length > 0 && (
+              <Pressable
+                style={styles.clearButton}
+                onPress={handleClear}
+                accessibilityLabel="Clear search"
+                accessibilityRole="button"
+                hitSlop={8}
+              >
+                <Text style={styles.clearButtonText}>✕</Text>
+              </Pressable>
+            )
+          )}
+        </View>
       </View>
 
       {suggestionsVisible && (
@@ -438,11 +447,16 @@ const styles = StyleSheet.create({
   },
   // Shared absolute-position slot (right edge of the input) for whichever
   // accessory is showing - the clear button, or a spinner while loading.
+  // This wrapper stretches full height and centers its child; it must not
+  // have a fixed height/width of its own, or combining that with top+bottom
+  // makes Yoga anchor it to `top` and ignore `bottom` entirely (which is
+  // what made the clear button hug the top of the search bar before).
   inputAccessory: {
     position: 'absolute',
     right: 10,
     top: 0,
     bottom: 0,
+    alignItems: 'center',
     justifyContent: 'center',
   },
   clearButton: {

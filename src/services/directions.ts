@@ -124,25 +124,16 @@ export async function findPlace(
   };
 }
 
-// A route is only walkable if it doesn't rely on a literal ferry crossing
-// (nothing to walk on) - the Directions API will otherwise happily bridge a
-// water gap with a FERRY step, which reads as "walking across the
-// lake/river" once decoded onto the map. This only flags an explicit ferry
-// leg, not every non-"WALKING" step - normal walking routes can legitimately
-// include steps (e.g. crossing a bridge) that shouldn't be excluded, and
-// over-filtering here was forcing every remaining option into a long
-// detour around otherwise-fine, nearby routes.
-function crossesWater(route: any): boolean {
-  const steps = route.legs?.[0]?.steps ?? [];
-  return steps.some(
-    (step: any) => step.travel_mode === 'FERRY' || /\bferry\b/i.test(step.html_instructions ?? ''),
-  );
-}
+// NOTE: Google's Directions API has no "wheelchair accessible" walking
+// option - that parameter only exists for `mode=transit`
+// (transit_routing_preference=less_walking doesn't apply either, and
+// there's no avoid=stairs/curbs equivalent for walking). There is no
+// server-side way to request or filter for wheelchair-accessible routes
+// here; every route Google returns for mode=walking is used as-is, unfiltered.
 
 // Fetches every walking route Google offers between two points (not just
 // the fastest) so the user can preview and pick between them, sorted
-// fastest-first. Routes that require a ferry (i.e. aren't actually
-// walkable) are filtered out.
+// fastest-first.
 export async function getWalkingRoutes(
   origin: LatLng,
   destination: LatLng,
@@ -164,21 +155,20 @@ export async function getWalkingRoutes(
     throw new DirectionsError(`Could not find a walking route (${data.status ?? 'unknown error'}).`);
   }
 
-  const walkableRoutes = data.routes.filter((route: any) => !crossesWater(route));
-  if (walkableRoutes.length === 0) {
-    throw new DirectionsError(
-      'No walkable route was found - every option Google returned crosses water with no path.',
-    );
-  }
-
-  const routes: WalkingRoute[] = walkableRoutes.map((route: any) => {
+  const routes: WalkingRoute[] = data.routes.map((route: any) => {
     const leg = route.legs[0];
+    // Each step carries its own, higher-resolution polyline; the route's
+    // overview_polyline is a lossy simplification meant for quick preview
+    // rendering, and decoding it directly is what made routes look overly
+    // boxy/jagged at turns. Stitching the per-step polylines together
+    // instead follows the actual street geometry much more closely.
+    const coordinates = leg.steps.flatMap((step: any) => decodePolyline(step.polyline.points));
     return {
       origin,
       destination,
       destinationName,
       destinationAddress,
-      coordinates: decodePolyline(route.overview_polyline.points),
+      coordinates,
       distanceMeters: leg.distance.value,
       durationSeconds: leg.duration.value,
       summary: route.summary || undefined,
