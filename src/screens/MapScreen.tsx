@@ -43,6 +43,18 @@ const ROUTE_COLORS = {
   unselected: { fill: '#b2bdf9', outline: '#2b29c2' },
 };
 
+// Custom Marker children must have explicit dimensions: react-native-maps
+// snapshots the child view into a native marker image, and on iOS a view
+// sized purely by its intrinsic content can measure as 0x0 at snapshot
+// time - producing an invisible marker with no error.
+const ROUTE_LABEL_SIZE = { width: 84, height: 44 };
+
+// A shadow is drawn outside its view's own bounds, but the marker snapshot
+// only captures the child's frame - so the pill is nested inside a
+// transparent wrapper this much larger on every side, giving the shadow
+// room to render instead of being clipped at the edges.
+const ROUTE_LABEL_SHADOW_PADDING = 8;
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
 export function MapScreen({ navigation }: Props) {
@@ -61,6 +73,19 @@ export function MapScreen({ navigation }: Props) {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
+  const [tracksViewChanges, setTracksViewChanges] = useState(true);
+
+  // The route pills are custom Marker children, which react-native-maps
+  // renders by snapshotting the view into a native marker image. If that
+  // snapshot happens before the view has laid out, the marker comes out
+  // blank. Re-enabling tracking whenever the pills' content or styling
+  // changes forces a fresh capture after layout, then it's switched back
+  // off so the map isn't re-snapshotting on every frame.
+  useEffect(() => {
+    setTracksViewChanges(true);
+    const timeout = setTimeout(() => setTracksViewChanges(false), 1000);
+    return () => clearTimeout(timeout);
+  }, [routes, selectedRouteIndex]);
 
   // In-app replacement for Alert.alert - keeps error/notice styling
   // consistent with the rest of the screen instead of the OS-native dialog.
@@ -300,22 +325,28 @@ export function MapScreen({ navigation }: Props) {
               key={`label-${index}`}
               coordinate={r.coordinates[Math.floor(r.coordinates.length / 2)]}
               anchor={{ x: 0.5, y: 0.5 }}
+              centerOffset={{ x: 0, y: 0 }}
+              tracksViewChanges={tracksViewChanges}
+              zIndex={10 + (isSelected ? 1 : 0)}
               onPress={() => setSelectedRouteIndex(index)}
             >
               {/* collapsable={false} keeps this View in the native hierarchy -
                   without it, RN's view-flattening optimization can strip a
                   plain style-only View out entirely, leaving react-native-maps
                   nothing to snapshot and rendering the marker blank. */}
-              <View
-                collapsable={false}
-                style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}
-              >
-                <Text style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}>
-                  {formatDuration(r.durationSeconds)}
-                </Text>
-                <Text style={[styles.routeLabelDistance, isSelected && styles.routeLabelTextSelected]}>
-                  {formatDistance(r.distanceMeters)}
-                </Text>
+              <View collapsable={false} style={styles.routeLabelWrapper}>
+                <View style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}>
+                  <Text
+                    style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}
+                  >
+                    {formatDuration(r.durationSeconds)}
+                  </Text>
+                  <Text
+                    style={[styles.routeLabelDistance, isSelected && styles.routeLabelTextSelected]}
+                  >
+                    {formatDistance(r.distanceMeters)}
+                  </Text>
+                </View>
               </View>
             </Marker>
           );
@@ -496,26 +527,35 @@ const styles = StyleSheet.create({
   },
   suggestionName: { fontSize: 15, fontWeight: '600', color: '#111' },
   suggestionSecondary: { fontSize: 13, color: '#777', marginTop: 2 },
-  routeLabel: {
-    backgroundColor: ROUTE_COLORS.unselected.fill,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderWidth: 1.5,
-    borderColor: ROUTE_COLORS.unselected.outline,
+  // Transparent padding around the pill so its shadow isn't clipped out of
+  // the native marker snapshot - see ROUTE_LABEL_SHADOW_PADDING.
+  routeLabelWrapper: {
+    width: ROUTE_LABEL_SIZE.width + ROUTE_LABEL_SHADOW_PADDING * 2,
+    height: ROUTE_LABEL_SIZE.height + ROUTE_LABEL_SHADOW_PADDING * 2,
+    backgroundColor: 'transparent',
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Fixed width/height (not intrinsic sizing) so the native marker snapshot
+  // has real dimensions to capture - see ROUTE_LABEL_SIZE.
+  routeLabel: {
+    width: ROUTE_LABEL_SIZE.width,
+    height: ROUTE_LABEL_SIZE.height,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
   },
   routeLabelSelected: {
-    backgroundColor: ROUTE_COLORS.selected.fill,
-    borderColor: ROUTE_COLORS.selected.outline,
+    backgroundColor: '#0020d2',
   },
-  routeLabelDuration: { fontSize: 12, fontWeight: '700', color: ROUTE_COLORS.unselected.outline },
-  routeLabelDistance: { fontSize: 10, fontWeight: '600', color: ROUTE_COLORS.unselected.outline },
+  routeLabelDuration: { fontSize: 13, fontWeight: '700', color: '#000' },
+  routeLabelDistance: { fontSize: 11, fontWeight: '600', color: '#000', marginTop: 1 },
   routeLabelTextSelected: { color: '#fff' },
   routePanel: {
     position: 'absolute',
