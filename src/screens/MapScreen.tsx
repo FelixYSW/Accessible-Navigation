@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Keyboard,
   Platform,
@@ -13,6 +12,7 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import type { LatLng, PlaceSuggestion, WalkingRoute } from '../types/route';
@@ -30,8 +30,10 @@ import { formatDistance, formatDuration } from '../utils/format';
 const AUTOCOMPLETE_DEBOUNCE_MS = 300;
 
 // Screen-edge margin (in px) kept clear when framing route previews, so the
-// polylines don't sit under the search bar or the route picker panel.
-const ROUTE_FIT_PADDING = { top: 100, right: 60, bottom: 220, left: 60 };
+// polylines don't sit under the route picker panel at the bottom (the top
+// margin is computed per-device from the safe area, since the search bar
+// now sits directly under it with no header above).
+const ROUTE_FIT_SIDE_PADDING = { right: 60, bottom: 220, left: 60 };
 
 // Each route is drawn as two stacked polylines (a wider "outline" stroke
 // under a narrower "fill" stroke) so it reads as a bordered line against
@@ -45,6 +47,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
 export function MapScreen({ navigation }: Props) {
   const mapRef = useRef<MapView>(null);
+  const insets = useSafeAreaInsets();
+  // With the header removed, the search bar sits right under the safe area
+  // (notch/status bar) instead of a fixed screen offset.
+  const searchBarTop = insets.top + 8;
   const [origin, setOrigin] = useState<LatLng | null>(null);
   const [query, setQuery] = useState('');
   const [routes, setRoutes] = useState<WalkingRoute[]>([]);
@@ -54,12 +60,17 @@ export function MapScreen({ navigation }: Props) {
   const [suggestionsVisible, setSuggestionsVisible] = useState(false);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
+
+  // In-app replacement for Alert.alert - keeps error/notice styling
+  // consistent with the rest of the screen instead of the OS-native dialog.
+  const showWarning = (title: string, message: string) => setWarning({ title, message });
 
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(
+        showWarning(
           'Location permission needed',
           'Accessible Navigation needs your location to plan walking routes.',
         );
@@ -69,6 +80,19 @@ export function MapScreen({ navigation }: Props) {
       setOrigin({ latitude: position.coords.latitude, longitude: position.coords.longitude });
     })();
   }, []);
+
+  // MapView's `initialRegion` is only read once, at mount - and the very
+  // first render happens before the location fetch above resolves, so it
+  // always starts on the Kuala Lumpur fallback. Once `origin` actually
+  // arrives, explicitly move the camera there instead of relying on the
+  // (by-then-ignored) prop.
+  useEffect(() => {
+    if (!origin || !mapRef.current) return;
+    mapRef.current.animateToRegion(
+      { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 },
+      500,
+    );
+  }, [origin]);
 
   // Keeps the route preview panel (and suggestions box) above the on-screen
   // keyboard - both are absolutely positioned, so without this they end up
@@ -125,10 +149,10 @@ export function MapScreen({ navigation }: Props) {
     if (routes.length === 0 || !mapRef.current) return;
     const allCoordinates = routes.flatMap((r) => r.coordinates);
     mapRef.current.fitToCoordinates(allCoordinates, {
-      edgePadding: ROUTE_FIT_PADDING,
+      edgePadding: { ...ROUTE_FIT_SIDE_PADDING, top: searchBarTop + 60 },
       animated: true,
     });
-  }, [routes]);
+  }, [routes, searchBarTop]);
 
   const previewRoutes = async (
     destination: LatLng,
@@ -136,7 +160,7 @@ export function MapScreen({ navigation }: Props) {
     destinationAddress?: string,
   ) => {
     if (!origin) {
-      Alert.alert('Location not ready', 'Still determining your current location, try again shortly.');
+      showWarning('Location not ready', 'Still determining your current location, try again shortly.');
       return;
     }
 
@@ -153,7 +177,7 @@ export function MapScreen({ navigation }: Props) {
       setRoutes(walkingRoutes);
       setSelectedRouteIndex(0);
     } catch (error) {
-      Alert.alert('Could not find route', error instanceof Error ? error.message : String(error));
+      showWarning('Could not find route', error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
@@ -167,7 +191,7 @@ export function MapScreen({ navigation }: Props) {
       const place = await findPlace(query.trim());
       await previewRoutes(place.location, place.name, place.address);
     } catch (error) {
-      Alert.alert('Could not find route', error instanceof Error ? error.message : String(error));
+      showWarning('Could not find route', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -179,7 +203,7 @@ export function MapScreen({ navigation }: Props) {
       const place = await getPlaceDetails(suggestion.placeId);
       await previewRoutes(place.location, place.name, place.address);
     } catch (error) {
-      Alert.alert('Could not find route', error instanceof Error ? error.message : String(error));
+      showWarning('Could not find route', error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -229,15 +253,19 @@ export function MapScreen({ navigation }: Props) {
               <React.Fragment key={`alt-${index}`}>
                 <Polyline
                   coordinates={r.coordinates}
-                  strokeWidth={7}
+                  strokeWidth={10}
                   strokeColor={ROUTE_COLORS.unselected.outline}
+                  lineCap="round"
+                  lineJoin="round"
                   tappable
                   onPress={() => setSelectedRouteIndex(index)}
                 />
                 <Polyline
                   coordinates={r.coordinates}
-                  strokeWidth={4}
+                  strokeWidth={6}
                   strokeColor={ROUTE_COLORS.unselected.fill}
+                  lineCap="round"
+                  lineJoin="round"
                 />
               </React.Fragment>
             ),
@@ -247,14 +275,18 @@ export function MapScreen({ navigation }: Props) {
           <>
             <Polyline
               coordinates={selectedRoute.coordinates}
-              strokeWidth={8}
+              strokeWidth={12}
               strokeColor={ROUTE_COLORS.selected.outline}
+              lineCap="round"
+              lineJoin="round"
               zIndex={2}
             />
             <Polyline
               coordinates={selectedRoute.coordinates}
-              strokeWidth={5}
+              strokeWidth={7}
               strokeColor={ROUTE_COLORS.selected.fill}
+              lineCap="round"
+              lineJoin="round"
               zIndex={3}
             />
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
@@ -268,7 +300,6 @@ export function MapScreen({ navigation }: Props) {
               key={`label-${index}`}
               coordinate={r.coordinates[Math.floor(r.coordinates.length / 2)]}
               anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={false}
               onPress={() => setSelectedRouteIndex(index)}
             >
               <View style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}>
@@ -284,21 +315,23 @@ export function MapScreen({ navigation }: Props) {
         })}
       </MapView>
 
-      <View style={styles.searchBar}>
-        <View style={styles.inputWrapper}>
-          <TextInput
-            style={styles.input}
-            placeholder="Search a destination"
-            value={query}
-            onChangeText={handleQueryChange}
-            onFocus={() => setSuggestionsVisible(true)}
-            onBlur={handleBlur}
-            onSubmitEditing={handleSearch}
-            returnKeyType="search"
-          />
-          {query.length > 0 && (
+      <View style={[styles.searchBar, { top: searchBarTop }]}>
+        <TextInput
+          style={styles.input}
+          placeholder="Search a destination"
+          value={query}
+          onChangeText={handleQueryChange}
+          onFocus={() => setSuggestionsVisible(true)}
+          onBlur={handleBlur}
+          onSubmitEditing={handleSearch}
+          returnKeyType="search"
+        />
+        {loading ? (
+          <ActivityIndicator style={styles.inputAccessory} color={ROUTE_COLORS.selected.fill} />
+        ) : (
+          query.length > 0 && (
             <Pressable
-              style={styles.clearButton}
+              style={[styles.clearButton, styles.inputAccessory]}
               onPress={handleClear}
               accessibilityLabel="Clear search"
               accessibilityRole="button"
@@ -306,15 +339,12 @@ export function MapScreen({ navigation }: Props) {
             >
               <Text style={styles.clearButtonText}>✕</Text>
             </Pressable>
-          )}
-        </View>
-        <Pressable style={styles.searchButton} onPress={handleSearch} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.searchButtonText}>Go</Text>}
-        </Pressable>
+          )
+        )}
       </View>
 
       {suggestionsVisible && (
-        <View style={[styles.suggestionsBox, { maxHeight: 260 }]}>
+        <View style={[styles.suggestionsBox, { top: searchBarTop + 58, maxHeight: 260 }]}>
           {suggestionsLoading && suggestions.length === 0 ? (
             <View style={styles.suggestionsEmpty}>
               <ActivityIndicator />
@@ -368,6 +398,18 @@ export function MapScreen({ navigation }: Props) {
           </Pressable>
         </View>
       )}
+
+      {warning && (
+        <View style={styles.warningBackdrop}>
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>{warning.title}</Text>
+            <Text style={styles.warningMessage}>{warning.message}</Text>
+            <Pressable style={styles.warningButton} onPress={() => setWarning(null)}>
+              <Text style={styles.warningButtonText}>OK</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -376,16 +418,10 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
   searchBar: {
+    // top is set inline, from the safe-area inset.
     position: 'absolute',
-    top: 16,
     left: 16,
     right: 16,
-    flexDirection: 'row',
-    gap: 8,
-  },
-  inputWrapper: {
-    flex: 1,
-    justifyContent: 'center',
   },
   input: {
     backgroundColor: '#fff',
@@ -400,9 +436,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
   },
-  clearButton: {
+  // Shared absolute-position slot (right edge of the input) for whichever
+  // accessory is showing - the clear button, or a spinner while loading.
+  inputAccessory: {
     position: 'absolute',
     right: 10,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+  },
+  clearButton: {
     height: 24,
     width: 24,
     borderRadius: 12,
@@ -412,8 +455,8 @@ const styles = StyleSheet.create({
   },
   clearButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   suggestionsBox: {
+    // top is set inline, relative to the search bar's own (safe-area-based) top.
     position: 'absolute',
-    top: 74,
     left: 16,
     right: 16,
     backgroundColor: '#fff',
@@ -439,14 +482,6 @@ const styles = StyleSheet.create({
   },
   suggestionName: { fontSize: 15, fontWeight: '600', color: '#111' },
   suggestionSecondary: { fontSize: 13, color: '#777', marginTop: 2 },
-  searchButton: {
-    backgroundColor: '#0A84FF',
-    borderRadius: 10,
-    paddingHorizontal: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   routeLabel: {
     backgroundColor: ROUTE_COLORS.unselected.fill,
     borderRadius: 10,
@@ -494,4 +529,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   startButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  warningBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  warningCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingTop: 20,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  warningTitle: { fontSize: 17, fontWeight: '700', color: '#111', textAlign: 'center' },
+  warningMessage: {
+    fontSize: 14,
+    color: '#555',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 20,
+  },
+  warningButton: {
+    marginTop: 18,
+    alignSelf: 'stretch',
+    backgroundColor: ROUTE_COLORS.selected.fill,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  warningButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 });

@@ -14,7 +14,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 export function RootNavigator() {
   return (
     <Stack.Navigator initialRouteName="Map">
-      <Stack.Screen name="Map" component={MapScreen} options={{ title: 'Accessible Navigation' }} />
+      <Stack.Screen name="Map" component={MapScreen} options={{ headerShown: false }} />
       <Stack.Screen
         name="ARNavigation"
         component={ARNavigationScreen}

@@ -124,15 +124,18 @@ export async function findPlace(
   };
 }
 
-// A route is only walkable if every step actually involves walking - the
-// Directions API will otherwise happily bridge a water crossing with a
-// FERRY step (nothing to walk on), which reads as "walking across the
-// lake/river" once decoded onto the map.
+// A route is only walkable if it doesn't rely on a literal ferry crossing
+// (nothing to walk on) - the Directions API will otherwise happily bridge a
+// water gap with a FERRY step, which reads as "walking across the
+// lake/river" once decoded onto the map. This only flags an explicit ferry
+// leg, not every non-"WALKING" step - normal walking routes can legitimately
+// include steps (e.g. crossing a bridge) that shouldn't be excluded, and
+// over-filtering here was forcing every remaining option into a long
+// detour around otherwise-fine, nearby routes.
 function crossesWater(route: any): boolean {
   const steps = route.legs?.[0]?.steps ?? [];
   return steps.some(
-    (step: any) =>
-      step.travel_mode !== 'WALKING' || /ferry/i.test(step.html_instructions ?? ''),
+    (step: any) => step.travel_mode === 'FERRY' || /\bferry\b/i.test(step.html_instructions ?? ''),
   );
 }
 
@@ -152,7 +155,6 @@ export async function getWalkingRoutes(
   url.searchParams.set('destination', `${destination.latitude},${destination.longitude}`);
   url.searchParams.set('mode', 'walking');
   url.searchParams.set('alternatives', 'true');
-  url.searchParams.set('avoid', 'ferries');
   url.searchParams.set('key', apiKey);
 
   const response = await fetch(url.toString());
