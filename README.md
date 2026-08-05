@@ -25,7 +25,10 @@ can't run a modern Xcode locally, the `.ipa` is built in CI instead:
 
 1. Add a repository secret named `GOOGLE_MAPS_API_KEY`
    (Settings → Secrets and variables → Actions) with a key that has the
-   **Places API** and **Directions API** enabled.
+   **Places API**, **Directions API**, **Maps SDK for iOS**, and
+   **Maps SDK for Android** all enabled in Google Cloud Console (the first
+   two power search/routing; the SDKs are what actually render the map
+   tiles — without them the map screen stays blank even with a valid key).
 2. Push to `main`, or run the **Build iOS IPA** workflow manually from the
    Actions tab.
 3. Once it finishes, download the `AccessibleNavigation-ipa` artifact from

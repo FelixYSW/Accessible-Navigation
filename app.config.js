@@ -22,9 +22,6 @@ module.exports = {
           'This app uses your location to calculate walking routes and warn you about nearby hazards.',
         ITSAppUsesNonExemptEncryption: false,
       },
-      config: {
-        googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-      },
     },
     android: {
       package: 'com.felixyap.accessiblenavigation',
@@ -35,11 +32,6 @@ module.exports = {
         monochromeImage: './assets/android-icon-monochrome.png',
       },
       predictiveBackGestureEnabled: false,
-      config: {
-        googleMaps: {
-          apiKey: GOOGLE_MAPS_API_KEY,
-        },
-      },
     },
     web: {
       favicon: './assets/favicon.png',
@@ -54,7 +46,13 @@ module.exports = {
             'Accessible Navigation uses your location to plan routes and detect nearby hazards.',
         },
       ],
-      'react-native-maps',
+      [
+        'react-native-maps',
+        {
+          iosGoogleMapsApiKey: GOOGLE_MAPS_API_KEY,
+          androidGoogleMapsApiKey: GOOGLE_MAPS_API_KEY,
+        },
+      ],
     ],
     extra: {
       googleMapsApiKey: GOOGLE_MAPS_API_KEY,
