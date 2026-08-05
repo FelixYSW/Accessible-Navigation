@@ -69,14 +69,14 @@ export async function getPlaceAutocomplete(
 }
 
 // Resolves a suggestion's place ID (from either of the two functions above)
-// to the coordinates needed to fetch a walking route.
+// to the coordinates and address needed to fetch a walking route.
 export async function getPlaceDetails(
   placeId: string,
-): Promise<{ name: string; location: LatLng }> {
+): Promise<{ name: string; address?: string; location: LatLng }> {
   const apiKey = getApiKey();
   const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
   url.searchParams.set('place_id', placeId);
-  url.searchParams.set('fields', 'name,geometry');
+  url.searchParams.set('fields', 'name,geometry,formatted_address');
   url.searchParams.set('key', apiKey);
 
   const response = await fetch(url.toString());
@@ -88,6 +88,7 @@ export async function getPlaceDetails(
 
   return {
     name: data.result.name as string,
+    address: data.result.formatted_address as string | undefined,
     location: {
       latitude: data.result.geometry.location.lat,
       longitude: data.result.geometry.location.lng,
@@ -97,7 +98,9 @@ export async function getPlaceDetails(
 
 // Resolves a free-text search query (e.g. "KLCC") to a place using the
 // Google Places API Text Search endpoint.
-export async function findPlace(query: string): Promise<{ name: string; location: LatLng }> {
+export async function findPlace(
+  query: string,
+): Promise<{ name: string; address?: string; location: LatLng }> {
   const apiKey = getApiKey();
   const url = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
   url.searchParams.set('query', query);
@@ -113,6 +116,7 @@ export async function findPlace(query: string): Promise<{ name: string; location
   const result = data.results[0];
   return {
     name: result.name as string,
+    address: result.formatted_address as string | undefined,
     location: {
       latitude: result.geometry.location.lat,
       longitude: result.geometry.location.lng,
@@ -120,13 +124,27 @@ export async function findPlace(query: string): Promise<{ name: string; location
   };
 }
 
+// A route is only walkable if every step actually involves walking - the
+// Directions API will otherwise happily bridge a water crossing with a
+// FERRY step (nothing to walk on), which reads as "walking across the
+// lake/river" once decoded onto the map.
+function crossesWater(route: any): boolean {
+  const steps = route.legs?.[0]?.steps ?? [];
+  return steps.some(
+    (step: any) =>
+      step.travel_mode !== 'WALKING' || /ferry/i.test(step.html_instructions ?? ''),
+  );
+}
+
 // Fetches every walking route Google offers between two points (not just
 // the fastest) so the user can preview and pick between them, sorted
-// fastest-first.
+// fastest-first. Routes that require a ferry (i.e. aren't actually
+// walkable) are filtered out.
 export async function getWalkingRoutes(
   origin: LatLng,
   destination: LatLng,
   destinationName: string,
+  destinationAddress?: string,
 ): Promise<WalkingRoute[]> {
   const apiKey = getApiKey();
   const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
@@ -134,6 +152,7 @@ export async function getWalkingRoutes(
   url.searchParams.set('destination', `${destination.latitude},${destination.longitude}`);
   url.searchParams.set('mode', 'walking');
   url.searchParams.set('alternatives', 'true');
+  url.searchParams.set('avoid', 'ferries');
   url.searchParams.set('key', apiKey);
 
   const response = await fetch(url.toString());
@@ -143,12 +162,20 @@ export async function getWalkingRoutes(
     throw new DirectionsError(`Could not find a walking route (${data.status ?? 'unknown error'}).`);
   }
 
-  const routes: WalkingRoute[] = data.routes.map((route: any) => {
+  const walkableRoutes = data.routes.filter((route: any) => !crossesWater(route));
+  if (walkableRoutes.length === 0) {
+    throw new DirectionsError(
+      'No walkable route was found - every option Google returned crosses water with no path.',
+    );
+  }
+
+  const routes: WalkingRoute[] = walkableRoutes.map((route: any) => {
     const leg = route.legs[0];
     return {
       origin,
       destination,
       destinationName,
+      destinationAddress,
       coordinates: decodePolyline(route.overview_polyline.points),
       distanceMeters: leg.distance.value,
       durationSeconds: leg.duration.value,

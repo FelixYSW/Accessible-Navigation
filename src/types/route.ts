@@ -14,6 +14,9 @@ export interface WalkingRoute {
   // Sultan Ismail"), from the Directions API - lets the route picker tell
   // otherwise-similar alternatives apart. Absent for very short routes.
   summary?: string;
+  // Full formatted address of the destination (from Place Details / Text
+  // Search), shown as the secondary line under the destination name.
+  destinationAddress?: string;
 }
 
 // A row in the search bar's suggestion dropdown - either a nearby place

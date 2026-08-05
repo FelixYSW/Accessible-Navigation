@@ -4,6 +4,7 @@ import {
   Alert,
   FlatList,
   Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -22,6 +23,7 @@ import {
   getPlaceDetails,
   getWalkingRoutes,
 } from '../services/directions';
+import { formatDistance, formatDuration } from '../utils/format';
 
 // How long to wait after the user stops typing before firing an
 // autocomplete request, to avoid a network call on every keystroke.
@@ -30,6 +32,14 @@ const AUTOCOMPLETE_DEBOUNCE_MS = 300;
 // Screen-edge margin (in px) kept clear when framing route previews, so the
 // polylines don't sit under the search bar or the route picker panel.
 const ROUTE_FIT_PADDING = { top: 100, right: 60, bottom: 220, left: 60 };
+
+// Each route is drawn as two stacked polylines (a wider "outline" stroke
+// under a narrower "fill" stroke) so it reads as a bordered line against
+// the basemap, the way Google Maps draws its route options.
+const ROUTE_COLORS = {
+  selected: { fill: '#490dfb', outline: '#1d087e' },
+  unselected: { fill: '#b2bdf9', outline: '#2b29c2' },
+};
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
@@ -43,6 +53,7 @@ export function MapScreen({ navigation }: Props) {
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [suggestionsVisible, setSuggestionsVisible] = useState(false);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -57,6 +68,21 @@ export function MapScreen({ navigation }: Props) {
       const position = await Location.getCurrentPositionAsync({});
       setOrigin({ latitude: position.coords.latitude, longitude: position.coords.longitude });
     })();
+  }, []);
+
+  // Keeps the route preview panel (and suggestions box) above the on-screen
+  // keyboard - both are absolutely positioned, so without this they end up
+  // rendered underneath it and effectively disappear while the search bar
+  // is focused.
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) => setKeyboardHeight(e.endCoordinates.height));
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
   }, []);
 
   // Keeps the suggestion list in sync with what's typed: nearby places when
@@ -104,7 +130,11 @@ export function MapScreen({ navigation }: Props) {
     });
   }, [routes]);
 
-  const previewRoutes = async (destination: LatLng, destinationName: string) => {
+  const previewRoutes = async (
+    destination: LatLng,
+    destinationName: string,
+    destinationAddress?: string,
+  ) => {
     if (!origin) {
       Alert.alert('Location not ready', 'Still determining your current location, try again shortly.');
       return;
@@ -114,7 +144,12 @@ export function MapScreen({ navigation }: Props) {
     Keyboard.dismiss();
     setLoading(true);
     try {
-      const walkingRoutes = await getWalkingRoutes(origin, destination, destinationName);
+      const walkingRoutes = await getWalkingRoutes(
+        origin,
+        destination,
+        destinationName,
+        destinationAddress,
+      );
       setRoutes(walkingRoutes);
       setSelectedRouteIndex(0);
     } catch (error) {
@@ -130,7 +165,7 @@ export function MapScreen({ navigation }: Props) {
     Keyboard.dismiss();
     try {
       const place = await findPlace(query.trim());
-      await previewRoutes(place.location, place.name);
+      await previewRoutes(place.location, place.name, place.address);
     } catch (error) {
       Alert.alert('Could not find route', error instanceof Error ? error.message : String(error));
     }
@@ -142,14 +177,23 @@ export function MapScreen({ navigation }: Props) {
     Keyboard.dismiss();
     try {
       const place = await getPlaceDetails(suggestion.placeId);
-      await previewRoutes(place.location, place.name);
+      await previewRoutes(place.location, place.name, place.address);
     } catch (error) {
       Alert.alert('Could not find route', error instanceof Error ? error.message : String(error));
     }
   };
 
+  // Typing anything invalidates whatever route was previously previewed -
+  // the panel should only ever reflect a destination the user actually
+  // picked (via a suggestion or a submitted search), never stale text.
+  const handleQueryChange = (text: string) => {
+    setQuery(text);
+    if (routes.length > 0) setRoutes([]);
+  };
+
   const handleClear = () => {
     setQuery('');
+    setRoutes([]);
   };
 
   // Delayed so a tap on a suggestion row registers before the list unmounts
@@ -182,14 +226,20 @@ export function MapScreen({ navigation }: Props) {
         {routes.map(
           (r, index) =>
             index !== selectedRouteIndex && (
-              <Polyline
-                key={`alt-${index}`}
-                coordinates={r.coordinates}
-                strokeWidth={4}
-                strokeColor="rgba(120,120,120,0.6)"
-                tappable
-                onPress={() => setSelectedRouteIndex(index)}
-              />
+              <React.Fragment key={`alt-${index}`}>
+                <Polyline
+                  coordinates={r.coordinates}
+                  strokeWidth={7}
+                  strokeColor={ROUTE_COLORS.unselected.outline}
+                  tappable
+                  onPress={() => setSelectedRouteIndex(index)}
+                />
+                <Polyline
+                  coordinates={r.coordinates}
+                  strokeWidth={4}
+                  strokeColor={ROUTE_COLORS.unselected.fill}
+                />
+              </React.Fragment>
             ),
         )}
 
@@ -197,34 +247,41 @@ export function MapScreen({ navigation }: Props) {
           <>
             <Polyline
               coordinates={selectedRoute.coordinates}
-              strokeWidth={5}
-              strokeColor="#0A84FF"
+              strokeWidth={8}
+              strokeColor={ROUTE_COLORS.selected.outline}
               zIndex={2}
+            />
+            <Polyline
+              coordinates={selectedRoute.coordinates}
+              strokeWidth={5}
+              strokeColor={ROUTE_COLORS.selected.fill}
+              zIndex={3}
             />
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
           </>
         )}
 
-        {routes.map((r, index) => (
-          <Marker
-            key={`label-${index}`}
-            coordinate={r.coordinates[Math.floor(r.coordinates.length / 2)]}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
-            onPress={() => setSelectedRouteIndex(index)}
-          >
-            <View style={[styles.routeLabel, index === selectedRouteIndex && styles.routeLabelSelected]}>
-              <Text
-                style={[
-                  styles.routeLabelText,
-                  index === selectedRouteIndex && styles.routeLabelTextSelected,
-                ]}
-              >
-                {Math.round(r.durationSeconds / 60)} min
-              </Text>
-            </View>
-          </Marker>
-        ))}
+        {routes.map((r, index) => {
+          const isSelected = index === selectedRouteIndex;
+          return (
+            <Marker
+              key={`label-${index}`}
+              coordinate={r.coordinates[Math.floor(r.coordinates.length / 2)]}
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+              onPress={() => setSelectedRouteIndex(index)}
+            >
+              <View style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}>
+                <Text style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}>
+                  {formatDuration(r.durationSeconds)}
+                </Text>
+                <Text style={[styles.routeLabelDistance, isSelected && styles.routeLabelTextSelected]}>
+                  {formatDistance(r.distanceMeters)}
+                </Text>
+              </View>
+            </Marker>
+          );
+        })}
       </MapView>
 
       <View style={styles.searchBar}>
@@ -233,7 +290,7 @@ export function MapScreen({ navigation }: Props) {
             style={styles.input}
             placeholder="Search a destination"
             value={query}
-            onChangeText={setQuery}
+            onChangeText={handleQueryChange}
             onFocus={() => setSuggestionsVisible(true)}
             onBlur={handleBlur}
             onSubmitEditing={handleSearch}
@@ -257,7 +314,7 @@ export function MapScreen({ navigation }: Props) {
       </View>
 
       {suggestionsVisible && (
-        <View style={styles.suggestionsBox}>
+        <View style={[styles.suggestionsBox, { maxHeight: 260 }]}>
           {suggestionsLoading && suggestions.length === 0 ? (
             <View style={styles.suggestionsEmpty}>
               <ActivityIndicator />
@@ -290,37 +347,19 @@ export function MapScreen({ navigation }: Props) {
         </View>
       )}
 
-      {routes.length > 0 && selectedRoute && (
-        <View style={styles.routePanel}>
-          <FlatList
-            horizontal
-            data={routes}
-            keyExtractor={(_, index) => String(index)}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.routeOptionsList}
-            renderItem={({ item, index }) => {
-              const isSelected = index === selectedRouteIndex;
-              return (
-                <Pressable
-                  style={[styles.routeOption, isSelected && styles.routeOptionSelected]}
-                  onPress={() => setSelectedRouteIndex(index)}
-                >
-                  <Text style={[styles.routeOptionDuration, isSelected && styles.routeOptionTextSelected]}>
-                    {Math.round(item.durationSeconds / 60)} min
-                  </Text>
-                  <Text
-                    style={[styles.routeOptionDistance, isSelected && styles.routeOptionTextSelected]}
-                    numberOfLines={1}
-                  >
-                    {(item.distanceMeters / 1000).toFixed(1)} km
-                    {item.summary ? ` · via ${item.summary}` : ''}
-                  </Text>
-                </Pressable>
-              );
-            }}
-          />
-
-          <Text style={styles.routeTitle}>{selectedRoute.destinationName}</Text>
+      {routes.length > 0 && selectedRoute && !suggestionsVisible && (
+        <View style={[styles.routePanel, { bottom: 24 + keyboardHeight }]}>
+          <Text style={styles.routeName} numberOfLines={1}>
+            {selectedRoute.destinationName}
+          </Text>
+          {selectedRoute.destinationAddress && (
+            <Text style={styles.routeAddress} numberOfLines={1}>
+              {selectedRoute.destinationAddress}
+            </Text>
+          )}
+          <Text style={styles.routeStats}>
+            {formatDuration(selectedRoute.durationSeconds)} · {formatDistance(selectedRoute.distanceMeters)}
+          </Text>
           <Pressable
             style={styles.startButton}
             onPress={() => navigation.navigate('ARNavigation', { route: selectedRoute })}
@@ -377,7 +416,6 @@ const styles = StyleSheet.create({
     top: 74,
     left: 16,
     right: 16,
-    maxHeight: 260,
     backgroundColor: '#fff',
     borderRadius: 12,
     overflow: 'hidden',
@@ -410,24 +448,28 @@ const styles = StyleSheet.create({
   },
   searchButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   routeLabel: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: '#D0D0D0',
+    backgroundColor: ROUTE_COLORS.unselected.fill,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1.5,
+    borderColor: ROUTE_COLORS.unselected.outline,
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
   },
-  routeLabelSelected: { backgroundColor: '#0A84FF', borderColor: '#0A84FF' },
-  routeLabelText: { fontSize: 12, fontWeight: '700', color: '#333' },
+  routeLabelSelected: {
+    backgroundColor: ROUTE_COLORS.selected.fill,
+    borderColor: ROUTE_COLORS.selected.outline,
+  },
+  routeLabelDuration: { fontSize: 12, fontWeight: '700', color: ROUTE_COLORS.unselected.outline },
+  routeLabelDistance: { fontSize: 10, fontWeight: '600', color: ROUTE_COLORS.unselected.outline },
   routeLabelTextSelected: { color: '#fff' },
   routePanel: {
     position: 'absolute',
-    bottom: 24,
     left: 16,
     right: 16,
     backgroundColor: '#fff',
@@ -441,21 +483,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 4,
   },
-  routeOptionsList: { gap: 8, paddingBottom: 12 },
-  routeOption: {
-    backgroundColor: '#F0F0F3',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    minWidth: 110,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-  },
-  routeOptionSelected: { backgroundColor: '#E8F2FF', borderColor: '#0A84FF' },
-  routeOptionDuration: { fontSize: 16, fontWeight: '700', color: '#111' },
-  routeOptionDistance: { fontSize: 12, color: '#666', marginTop: 2 },
-  routeOptionTextSelected: { color: '#0A84FF' },
-  routeTitle: { fontSize: 17, fontWeight: '700' },
+  routeName: { fontSize: 17, fontWeight: '700', color: '#111' },
+  routeAddress: { fontSize: 13, color: '#777', marginTop: 2 },
+  routeStats: { fontSize: 15, fontWeight: '600', color: ROUTE_COLORS.selected.outline, marginTop: 8 },
   startButton: {
     marginTop: 12,
     backgroundColor: '#30D158',
