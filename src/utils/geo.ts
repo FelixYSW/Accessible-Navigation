@@ -10,6 +10,72 @@ function toDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
+export interface MapRegion {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
+
+// Web Mercator's vertical axis. Longitude maps linearly across the screen,
+// but latitude does not - projecting through Mercator is what keeps a
+// screen-space overlay pinned to the right spot on the map as it zooms.
+function mercatorY(latitude: number): number {
+  const clamped = Math.max(Math.min(latitude, 89.9), -89.9);
+  return Math.log(Math.tan(Math.PI / 4 + toRadians(clamped) / 2));
+}
+
+// Projects a geographic coordinate to an x/y pixel offset inside a map view
+// of `size` currently showing `region`, so plain React Native views can be
+// positioned on top of the map at real-world locations.
+export function coordinateToScreenPoint(
+  coordinate: LatLng,
+  region: MapRegion,
+  size: { width: number; height: number },
+): { x: number; y: number } {
+  const west = region.longitude - region.longitudeDelta / 2;
+  const x = ((coordinate.longitude - west) / region.longitudeDelta) * size.width;
+
+  const top = mercatorY(region.latitude + region.latitudeDelta / 2);
+  const bottom = mercatorY(region.latitude - region.latitudeDelta / 2);
+  const y = ((top - mercatorY(coordinate.latitude)) / (top - bottom)) * size.height;
+
+  return { x, y };
+}
+
+// Picks the point along a route best suited to carrying its label: the
+// vertex furthest from every other route, so overlapping alternatives get
+// labels on the stretches where they actually diverge (mirroring how
+// Google Maps places its route badges) rather than stacked on shared roads.
+export function labelPointForRoute(routes: LatLng[][], index: number): LatLng {
+  const own = routes[index];
+  const others = routes.filter((_, i) => i !== index);
+  if (others.length === 0) return own[Math.floor(own.length / 2)];
+
+  let best = own[Math.floor(own.length / 2)];
+  let bestDistance = -1;
+
+  // Sampling keeps this cheap on long routes with thousands of vertices.
+  const step = Math.max(1, Math.floor(own.length / 60));
+  for (let i = 0; i < own.length; i += step) {
+    const candidate = own[i];
+    let nearest = Infinity;
+    for (const other of others) {
+      const otherStep = Math.max(1, Math.floor(other.length / 60));
+      for (let j = 0; j < other.length; j += otherStep) {
+        const d = distanceMeters(candidate, other[j]);
+        if (d < nearest) nearest = d;
+      }
+    }
+    if (nearest > bestDistance) {
+      bestDistance = nearest;
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
 export function distanceMeters(a: LatLng, b: LatLng): number {
   const dLat = toRadians(b.latitude - a.latitude);
   const dLng = toRadians(b.longitude - a.longitude);

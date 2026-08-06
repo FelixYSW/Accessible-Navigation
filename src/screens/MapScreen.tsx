@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -24,6 +24,8 @@ import {
   getWalkingRoutes,
 } from '../services/directions';
 import { formatDistance, formatDuration } from '../utils/format';
+import { coordinateToScreenPoint, labelPointForRoute } from '../utils/geo';
+import type { MapRegion } from '../utils/geo';
 
 // How long to wait after the user stops typing before firing an
 // autocomplete request, to avoid a network call on every keystroke.
@@ -49,12 +51,6 @@ const ROUTE_COLORS = {
 // time - producing an invisible marker with no error.
 const ROUTE_LABEL_SIZE = { width: 84, height: 44 };
 
-// A shadow is drawn outside its view's own bounds, but the marker snapshot
-// only captures the child's frame - so the pill is nested inside a
-// transparent wrapper this much larger on every side, giving the shadow
-// room to render instead of being clipped at the edges.
-const ROUTE_LABEL_SHADOW_PADDING = 8;
-
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
 
 export function MapScreen({ navigation }: Props) {
@@ -73,19 +69,17 @@ export function MapScreen({ navigation }: Props) {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
-  const [tracksViewChanges, setTracksViewChanges] = useState(true);
+  // The map's current viewport and on-screen size, tracked so route labels
+  // can be projected into screen space and follow the map as it moves.
+  const [region, setRegion] = useState<MapRegion | null>(null);
+  const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
 
-  // The route pills are custom Marker children, which react-native-maps
-  // renders by snapshotting the view into a native marker image. If that
-  // snapshot happens before the view has laid out, the marker comes out
-  // blank. Re-enabling tracking whenever the pills' content or styling
-  // changes forces a fresh capture after layout, then it's switched back
-  // off so the map isn't re-snapshotting on every frame.
-  useEffect(() => {
-    setTracksViewChanges(true);
-    const timeout = setTimeout(() => setTracksViewChanges(false), 1000);
-    return () => clearTimeout(timeout);
-  }, [routes, selectedRouteIndex]);
+  // The coordinate each route's label sits on - recomputed only when the
+  // route set changes, since the search is O(n*m) over route vertices.
+  const labelPoints = useMemo(
+    () => routes.map((_, index) => labelPointForRoute(routes.map((r) => r.coordinates), index)),
+    [routes],
+  );
 
   // In-app replacement for Alert.alert - keeps error/notice styling
   // consistent with the rest of the screen instead of the OS-native dialog.
@@ -260,6 +254,9 @@ export function MapScreen({ navigation }: Props) {
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         showsUserLocation
+        onLayout={(e) => setMapSize(e.nativeEvent.layout)}
+        onRegionChange={setRegion}
+        onRegionChangeComplete={setRegion}
         initialRegion={
           origin
             ? { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }
@@ -317,41 +314,52 @@ export function MapScreen({ navigation }: Props) {
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
           </>
         )}
-
-        {routes.map((r, index) => {
-          const isSelected = index === selectedRouteIndex;
-          return (
-            <Marker
-              key={`label-${index}`}
-              coordinate={r.coordinates[Math.floor(r.coordinates.length / 2)]}
-              anchor={{ x: 0.5, y: 0.5 }}
-              centerOffset={{ x: 0, y: 0 }}
-              tracksViewChanges={tracksViewChanges}
-              zIndex={10 + (isSelected ? 1 : 0)}
-              onPress={() => setSelectedRouteIndex(index)}
-            >
-              {/* collapsable={false} keeps this View in the native hierarchy -
-                  without it, RN's view-flattening optimization can strip a
-                  plain style-only View out entirely, leaving react-native-maps
-                  nothing to snapshot and rendering the marker blank. */}
-              <View collapsable={false} style={styles.routeLabelWrapper}>
-                <View style={[styles.routeLabel, isSelected && styles.routeLabelSelected]}>
-                  <Text
-                    style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}
-                  >
-                    {formatDuration(r.durationSeconds)}
-                  </Text>
-                  <Text
-                    style={[styles.routeLabelDistance, isSelected && styles.routeLabelTextSelected]}
-                  >
-                    {formatDistance(r.distanceMeters)}
-                  </Text>
-                </View>
-              </View>
-            </Marker>
-          );
-        })}
       </MapView>
+
+      {/* Route labels are plain React Native views layered over the map,
+          positioned by projecting each route's label coordinate into screen
+          space. They deliberately avoid <Marker> custom children, which
+          render by snapshotting the child view natively and came out blank
+          on this stack (New Architecture + Google provider on iOS). */}
+      {region && mapSize && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          {routes.map((r, index) => {
+            const isSelected = index === selectedRouteIndex;
+            const point = coordinateToScreenPoint(labelPoints[index], region, mapSize);
+            const left = point.x - ROUTE_LABEL_SIZE.width / 2;
+            const top = point.y - ROUTE_LABEL_SIZE.height / 2;
+
+            // Skip labels the map has scrolled out of view.
+            if (
+              left < -ROUTE_LABEL_SIZE.width ||
+              top < -ROUTE_LABEL_SIZE.height ||
+              left > mapSize.width ||
+              top > mapSize.height
+            ) {
+              return null;
+            }
+
+            return (
+              <Pressable
+                key={`label-${index}`}
+                style={[
+                  styles.routeLabel,
+                  isSelected && styles.routeLabelSelected,
+                  { left, top, zIndex: isSelected ? 2 : 1 },
+                ]}
+                onPress={() => setSelectedRouteIndex(index)}
+              >
+                <Text style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}>
+                  {formatDuration(r.durationSeconds)}
+                </Text>
+                <Text style={[styles.routeLabelDistance, isSelected && styles.routeLabelTextSelected]}>
+                  {formatDistance(r.distanceMeters)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
 
       <View style={[styles.searchBar, { top: searchBarTop }]}>
         <TextInput
@@ -527,18 +535,11 @@ const styles = StyleSheet.create({
   },
   suggestionName: { fontSize: 15, fontWeight: '600', color: '#111' },
   suggestionSecondary: { fontSize: 13, color: '#777', marginTop: 2 },
-  // Transparent padding around the pill so its shadow isn't clipped out of
-  // the native marker snapshot - see ROUTE_LABEL_SHADOW_PADDING.
-  routeLabelWrapper: {
-    width: ROUTE_LABEL_SIZE.width + ROUTE_LABEL_SHADOW_PADDING * 2,
-    height: ROUTE_LABEL_SIZE.height + ROUTE_LABEL_SHADOW_PADDING * 2,
-    backgroundColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // Fixed width/height (not intrinsic sizing) so the native marker snapshot
-  // has real dimensions to capture - see ROUTE_LABEL_SIZE.
+  // Positioned absolutely over the map; `left`/`top` are supplied inline
+  // from the projected screen coordinate. Fixed size keeps that centering
+  // math simple (the projected point is the pill's center).
   routeLabel: {
+    position: 'absolute',
     width: ROUTE_LABEL_SIZE.width,
     height: ROUTE_LABEL_SIZE.height,
     backgroundColor: '#fff',
