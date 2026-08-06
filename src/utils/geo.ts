@@ -47,12 +47,17 @@ export function coordinateToScreenPoint(
 // vertex furthest from every other route, so overlapping alternatives get
 // labels on the stretches where they actually diverge (mirroring how
 // Google Maps places its route badges) rather than stacked on shared roads.
-export function labelPointForRoute(routes: LatLng[][], index: number): LatLng {
+//
+// Returns the *index* of that vertex, so callers can also look at its
+// neighbours - the redesigned route pill needs the local direction of the
+// route there to work out which way its tail should point.
+export function labelAnchorIndexForRoute(routes: LatLng[][], index: number): number {
   const own = routes[index];
   const others = routes.filter((_, i) => i !== index);
-  if (others.length === 0) return own[Math.floor(own.length / 2)];
+  const middle = Math.floor(own.length / 2);
+  if (others.length === 0) return middle;
 
-  let best = own[Math.floor(own.length / 2)];
+  let best = middle;
   let bestDistance = -1;
 
   // Sampling keeps this cheap on long routes with thousands of vertices.
@@ -69,7 +74,7 @@ export function labelPointForRoute(routes: LatLng[][], index: number): LatLng {
     }
     if (nearest > bestDistance) {
       bestDistance = nearest;
-      best = candidate;
+      best = i;
     }
   }
 

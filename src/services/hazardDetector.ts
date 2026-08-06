@@ -1,18 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { HazardClass, HazardDetection } from '../types/hazard';
-
-const HAZARD_CLASSES: HazardClass[] = [
-  'pothole',
-  'slippery-surface',
-  'broken-tactile-paving',
-  'pathway-obstruction',
-];
+import { HAZARD_CLASSES, type HazardClass, type HazardDetection } from '../types/hazard';
 
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-function generateStubDetections(): HazardDetection[] {
+function generateStubDetections(classes: HazardClass[]): HazardDetection[] {
+  if (classes.length === 0) return [];
   const count = Math.random() < 0.6 ? 1 : Math.random() < 0.9 ? 2 : 0;
 
   return Array.from({ length: count }, (_, i) => {
@@ -20,7 +14,7 @@ function generateStubDetections(): HazardDetection[] {
     const height = randomBetween(0.12, 0.22);
     return {
       id: `stub-${Date.now()}-${i}`,
-      hazardClass: HAZARD_CLASSES[Math.floor(Math.random() * HAZARD_CLASSES.length)],
+      hazardClass: classes[Math.floor(Math.random() * classes.length)],
       confidence: randomBetween(0.6, 0.97),
       boundingBox: {
         x: randomBetween(0.05, 0.95 - width),
@@ -41,8 +35,19 @@ function generateStubDetections(): HazardDetection[] {
 // `useFrameOutput` callback (react-native-vision-camera-worklets) that runs
 // the model via an `AsyncRunner` on each camera frame and calls
 // `scheduleOnRN` (react-native-worklets) to push detections into state here.
-export function useStubHazardDetector(active: boolean, intervalMs = 800): HazardDetection[] {
+//
+// `classes` narrows what may be emitted to the hazard types the user still
+// has switched on in Settings ("Avoid hazard types"), so a type they have
+// turned off stops being flagged on camera as well as avoided when routing.
+export function useStubHazardDetector(
+  active: boolean,
+  classes: HazardClass[] = HAZARD_CLASSES,
+  intervalMs = 800,
+): HazardDetection[] {
   const [detections, setDetections] = useState<HazardDetection[]>([]);
+  // Depend on the contents rather than the array identity, so a caller that
+  // rebuilds the list on every render doesn't restart the interval each time.
+  const classesKey = classes.join(',');
 
   useEffect(() => {
     if (!active) {
@@ -50,9 +55,10 @@ export function useStubHazardDetector(active: boolean, intervalMs = 800): Hazard
       return;
     }
 
-    const id = setInterval(() => setDetections(generateStubDetections()), intervalMs);
+    const enabled = classesKey ? (classesKey.split(',') as HazardClass[]) : [];
+    const id = setInterval(() => setDetections(generateStubDetections(enabled)), intervalMs);
     return () => clearInterval(id);
-  }, [active, intervalMs]);
+  }, [active, classesKey, intervalMs]);
 
   return detections;
 }

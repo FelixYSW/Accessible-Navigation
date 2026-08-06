@@ -1,27 +1,40 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Camera, useCameraPermission } from 'react-native-vision-camera';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { X } from 'lucide-react-native';
+import Svg, { Path } from 'react-native-svg';
 import * as Location from 'expo-location';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import type { LatLng } from '../types/route';
-import { bearingBetween, nextRoutePoint, relativeBearing } from '../utils/geo';
+import { HAZARD_CLASSES } from '../types/hazard';
+import { bearingBetween, distanceMeters, nextRoutePoint, relativeBearing } from '../utils/geo';
 import { useStubHazardDetector } from '../services/hazardDetector';
+import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
+import { AudioCueBars } from '../components/AudioCueBars';
+import { useSettings } from '../theme/SettingsContext';
+import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
+import { formatDistance, formatDuration } from '../utils/format';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ARNavigation'>;
 
+// Turns sharper than this are called out as a turn; anything straighter reads
+// as "Continue straight".
+const TURN_THRESHOLD_DEGREES = 25;
+
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
-  const { hasPermission, requestPermission } = useCameraPermission();
+  const insets = useSafeAreaInsets();
+  const { T, F, voiceGuidance, hazardActive } = useSettings();
   const [position, setPosition] = useState<LatLng | null>(null);
   const [heading, setHeading] = useState(0);
 
-  const detections = useStubHazardDetector(hasPermission);
-
-  useEffect(() => {
-    if (!hasPermission) requestPermission();
-  }, [hasPermission, requestPermission]);
+  const activeClasses = useMemo(
+    () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
+    [hazardActive],
+  );
+  const detections = useStubHazardDetector(true, activeClasses);
 
   useEffect(() => {
     let positionSubscription: Location.LocationSubscription | undefined;
@@ -45,72 +58,210 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   }, []);
 
   const target = position ? nextRoutePoint(walkingRoute.coordinates, position) : undefined;
-  const arrowBearing =
+  const turnAngle =
     position && target ? relativeBearing(heading, bearingBetween(position, target)) : undefined;
+  const metersToTarget = position && target ? distanceMeters(position, target) : undefined;
 
-  if (!hasPermission) {
-    return (
-      <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>Camera access is required for hazard detection.</Text>
-        <Pressable style={styles.permissionButton} onPress={requestPermission}>
-          <Text style={styles.permissionButtonText}>Grant Camera Access</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  const progress = useTripProgress(walkingRoute, position);
+  const remainingMeters = walkingRoute.distanceMeters * (1 - progress);
+  const remainingSeconds = walkingRoute.durationSeconds * (1 - progress);
+
+  const exit = () => navigation.goBack();
 
   return (
-    <View style={styles.container}>
-      <Camera style={StyleSheet.absoluteFill} isActive device="back" />
-      <HazardOverlay detections={detections} arrowBearing={arrowBearing} />
+    <CameraStage isActive>
+      <HazardOverlay detections={detections} />
 
-      <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
-        <Text style={styles.backButtonText}>Exit</Text>
-      </Pressable>
+      <View style={[styles.topRow, { top: insets.top + 4 }]}>
+        <Pressable
+          onPress={exit}
+          style={styles.exitButton}
+          accessibilityRole="button"
+          accessibilityLabel="Exit AR navigation"
+        >
+          <X size={18} color="#fff" strokeWidth={2.4} />
+        </Pressable>
 
-      <View style={styles.destinationBanner}>
-        <Text style={styles.destinationText}>To: {walkingRoute.destinationName}</Text>
+        {/* Only shown when Voice Guidance is on in Settings - the indicator
+            would otherwise claim audio cues the app is not speaking. */}
+        {voiceGuidance && (
+          <View style={styles.audioPill}>
+            <AudioCueBars color={T.green} />
+            <Text style={[styles.audioPillText, { fontSize: F.micro }]}>Audio cue</Text>
+          </View>
+        )}
       </View>
-    </View>
+
+      <View style={[styles.turnCard, { top: insets.top + 60 }]}>
+        <TurnArrow color={T.green} angle={turnAngle ?? 0} />
+        <Text style={[styles.turnInstruction, { fontSize: F.body }]}>
+          {describeTurn(turnAngle)}
+        </Text>
+        {metersToTarget !== undefined && (
+          <Text style={[styles.turnDistance, { fontSize: F.tinySm }]}>
+            for {formatDistance(metersToTarget)}
+          </Text>
+        )}
+      </View>
+
+      <View style={[styles.sheet, { bottom: insets.bottom > 0 ? insets.bottom : 32 }]}>
+        <View style={styles.sheetRow}>
+          <View style={styles.sheetText}>
+            <Text style={[styles.destination, { fontSize: F.body }]} numberOfLines={1}>
+              {walkingRoute.destinationName}
+            </Text>
+            <Text style={[styles.remaining, { fontSize: F.tinySm }]} numberOfLines={1}>
+              {formatDuration(remainingSeconds)} · {formatDistance(remainingMeters)} remaining
+            </Text>
+          </View>
+          <Pressable
+            onPress={exit}
+            style={styles.endButton}
+            accessibilityRole="button"
+            accessibilityLabel="End navigation"
+          >
+            <Text style={[styles.endButtonText, { fontSize: F.sm }]}>End</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              { backgroundColor: T.green, width: `${Math.round(progress * 100)}%` },
+            ]}
+          />
+        </View>
+      </View>
+    </CameraStage>
+  );
+}
+
+// How far along the route the walker is, as a 0-1 fraction. Measured by
+// walked distance rather than vertex index: polyline vertices bunch up around
+// corners, so counting them would make the remaining distance jump backwards
+// and forwards as the walker rounds a bend. Falls back to 0 until the first
+// location fix arrives.
+function useTripProgress(
+  walkingRoute: { coordinates: LatLng[] },
+  position: LatLng | null,
+): number {
+  return useMemo(() => {
+    const { coordinates } = walkingRoute;
+    if (!position || coordinates.length < 2) return 0;
+
+    // Cumulative distance to each vertex, and which vertex the walker is
+    // nearest to, in one pass.
+    let travelled = 0;
+    let total = 0;
+    let nearestDistance = Infinity;
+
+    for (let i = 1; i < coordinates.length; i += 1) {
+      const toHere = distanceMeters(position, coordinates[i - 1]);
+      if (toHere < nearestDistance) {
+        nearestDistance = toHere;
+        travelled = total;
+      }
+      total += distanceMeters(coordinates[i - 1], coordinates[i]);
+    }
+    if (distanceMeters(position, coordinates[coordinates.length - 1]) < nearestDistance) {
+      travelled = total;
+    }
+
+    if (total === 0) return 0;
+    return Math.min(1, Math.max(0, travelled / total));
+  }, [walkingRoute, position]);
+}
+
+function describeTurn(angle: number | undefined): string {
+  if (angle === undefined) return 'Getting your position';
+  if (Math.abs(angle) <= TURN_THRESHOLD_DEGREES) return 'Continue straight';
+  if (Math.abs(angle) >= 135) return 'Turn around';
+  return angle > 0 ? 'Turn right' : 'Turn left';
+}
+
+// The design's chevron: two strokes meeting at a point, rotated to indicate
+// which way to go (0 = straight ahead, positive = right).
+function TurnArrow({ color, angle }: { color: string; angle: number }) {
+  return (
+    <Svg width={40} height={34} viewBox="0 0 72 60" style={{ transform: [{ rotate: `${angle}deg` }] }}>
+      <Path
+        d="M36 4 L14 46 M36 4 L58 46"
+        stroke={color}
+        strokeWidth={7}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </Svg>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  permissionContainer: {
-    flex: 1,
+  topRow: {
+    position: 'absolute',
+    left: SCREEN_MARGIN,
+    right: SCREEN_MARGIN,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  exitButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
-    backgroundColor: '#000',
   },
-  permissionText: { color: '#fff', fontSize: 16, textAlign: 'center', marginBottom: 16 },
-  permissionButton: {
-    backgroundColor: '#0A84FF',
-    borderRadius: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  permissionButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  backButton: {
-    position: 'absolute',
-    top: 56,
-    left: 16,
+  audioPill: {
     backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  backButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  destinationBanner: {
-    position: 'absolute',
-    bottom: 40,
-    left: 16,
-    right: 16,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 10,
-    paddingVertical: 12,
+    borderRadius: 19,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 7,
   },
-  destinationText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  audioPillText: { color: '#fff', fontWeight: '600' },
+  turnCard: {
+    position: 'absolute',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(20,20,20,0.7)',
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    gap: 6,
+  },
+  turnInstruction: { color: '#fff', fontWeight: '700' },
+  turnDistance: { color: 'rgba(255,255,255,0.6)' },
+  sheet: {
+    position: 'absolute',
+    left: SCREEN_MARGIN,
+    right: SCREEN_MARGIN,
+    backgroundColor: 'rgba(20,20,20,0.72)',
+    borderRadius: RADIUS.section,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+  },
+  sheetRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  sheetText: { flex: 1 },
+  destination: { color: '#fff', fontWeight: '700' },
+  remaining: { color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+  endButton: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: RADIUS.small,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+  },
+  endButtonText: { color: '#fff', fontWeight: '700' },
+  progressTrack: {
+    marginTop: 12,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    overflow: 'hidden',
+  },
+  progressFill: { height: '100%', borderRadius: 3 },
 });

@@ -13,9 +13,11 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import type { LatLng, PlaceSuggestion, WalkingRoute } from '../types/route';
+import { HAZARD_CLASSES } from '../types/hazard';
 import {
   findPlace,
   getNearbyPlaces,
@@ -23,42 +25,44 @@ import {
   getPlaceDetails,
   getWalkingRoutes,
 } from '../services/directions';
+import { summariseRouteHazards } from '../services/routeHazards';
 import { formatDistance, formatDuration } from '../utils/format';
-import { coordinateToScreenPoint, labelPointForRoute } from '../utils/geo';
+import { coordinateToScreenPoint, labelAnchorIndexForRoute } from '../utils/geo';
 import type { MapRegion } from '../utils/geo';
+import { RoutePill } from '../components/RoutePill';
+import { useSettings } from '../theme/SettingsContext';
+import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 
 // How long to wait after the user stops typing before firing an
 // autocomplete request, to avoid a network call on every keystroke.
 const AUTOCOMPLETE_DEBOUNCE_MS = 300;
 
 // Screen-edge margin (in px) kept clear when framing route previews, so the
-// polylines don't sit under the route picker panel at the bottom (the top
-// margin is computed per-device from the safe area, since the search bar
-// now sits directly under it with no header above).
+// polylines don't sit under the route panel at the bottom (the top margin is
+// computed per-device from the safe area, since the search bar sits directly
+// under it with no header above).
 const ROUTE_FIT_SIDE_PADDING = { right: 60, bottom: 220, left: 60 };
 
-// Each route is drawn as two stacked polylines (a wider "outline" stroke
-// under a narrower "fill" stroke) so it reads as a bordered line against
-// the basemap, the way Google Maps draws its route options.
-const ROUTE_COLORS = {
-  selected: { fill: '#490dfb', outline: '#1d087e' },
-  unselected: { fill: '#b2bdf9', outline: '#2b29c2' },
-};
+// How far a route pill is pushed off its own route, perpendicular to the
+// route's local direction, so the pill sits beside the line and its tail can
+// point back at it.
+const PILL_OFFSET = 46;
 
-// Custom Marker children must have explicit dimensions: react-native-maps
-// snapshots the child view into a native marker image, and on iOS a view
-// sized purely by its intrinsic content can measure as 0x0 at snapshot
-// time - producing an invisible marker with no error.
-const ROUTE_LABEL_SIZE = { width: 84, height: 44 };
+// Vertices either side of the anchor used to estimate the route's local
+// direction. A single neighbour is too noisy on dense polylines.
+const DIRECTION_SAMPLE_SPAN = 4;
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Map'>;
+type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 
-export function MapScreen({ navigation }: Props) {
+export function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
-  // With the header removed, the search bar sits right under the safe area
-  // (notch/status bar) instead of a fixed screen offset.
+  const navigation = useNavigation<MapNavigation>();
+  const { T, F, darkMode, hazardActive } = useSettings();
+
+  // With no header above it, the search bar sits right under the safe area.
   const searchBarTop = insets.top + 8;
+
   const [origin, setOrigin] = useState<LatLng | null>(null);
   const [query, setQuery] = useState('');
   const [routes, setRoutes] = useState<WalkingRoute[]>([]);
@@ -69,16 +73,27 @@ export function MapScreen({ navigation }: Props) {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
-  // The map's current viewport and on-screen size, tracked so route labels
-  // can be projected into screen space and follow the map as it moves.
+  // The map's current viewport and on-screen size, tracked so route pills can
+  // be projected into screen space and follow the map as it moves.
   const [region, setRegion] = useState<MapRegion | null>(null);
   const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
 
-  // The coordinate each route's label sits on - recomputed only when the
+  // The vertex each route's pill is anchored to - recomputed only when the
   // route set changes, since the search is O(n*m) over route vertices.
-  const labelPoints = useMemo(
-    () => routes.map((_, index) => labelPointForRoute(routes.map((r) => r.coordinates), index)),
+  const anchorIndexes = useMemo(
+    () =>
+      routes.map((_, index) =>
+        labelAnchorIndexForRoute(
+          routes.map((r) => r.coordinates),
+          index,
+        ),
+      ),
     [routes],
+  );
+
+  const activeHazardClasses = useMemo(
+    () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
+    [hazardActive],
   );
 
   // In-app replacement for Alert.alert - keeps error/notice styling
@@ -107,20 +122,18 @@ export function MapScreen({ navigation }: Props) {
   // (by-then-ignored) prop.
   useEffect(() => {
     if (!origin || !mapRef.current) return;
-    mapRef.current.animateToRegion(
-      { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 },
-      500,
-    );
+    mapRef.current.animateToRegion({ ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 500);
   }, [origin]);
 
-  // Keeps the route preview panel (and suggestions box) above the on-screen
-  // keyboard - both are absolutely positioned, so without this they end up
-  // rendered underneath it and effectively disappear while the search bar
-  // is focused.
+  // Keeps the route panel (and suggestions box) above the on-screen keyboard -
+  // both are absolutely positioned, so without this they end up rendered
+  // underneath it and effectively disappear while the search bar is focused.
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvent, (e) => setKeyboardHeight(e.endCoordinates.height));
+    const showSub = Keyboard.addListener(showEvent, (e) =>
+      setKeyboardHeight(e.endCoordinates.height),
+    );
     const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
     return () => {
       showSub.remove();
@@ -161,9 +174,9 @@ export function MapScreen({ navigation }: Props) {
     };
   }, [query, suggestionsVisible, origin]);
 
-  // Frames every previewed route on screen whenever a fresh set arrives
-  // (not on re-selection - the camera shouldn't jump just because the user
-  // picked a different alternative that's already in view).
+  // Frames every previewed route on screen whenever a fresh set arrives (not
+  // on re-selection - the camera shouldn't jump just because the user picked
+  // a different alternative that's already in view).
   useEffect(() => {
     if (routes.length === 0 || !mapRef.current) return;
     const allCoordinates = routes.flatMap((r) => r.coordinates);
@@ -179,7 +192,10 @@ export function MapScreen({ navigation }: Props) {
     destinationAddress?: string,
   ) => {
     if (!origin) {
-      showWarning('Location not ready', 'Still determining your current location, try again shortly.');
+      showWarning(
+        'Location not ready',
+        'Still determining your current location, try again shortly.',
+      );
       return;
     }
 
@@ -226,9 +242,9 @@ export function MapScreen({ navigation }: Props) {
     }
   };
 
-  // Typing anything invalidates whatever route was previously previewed -
-  // the panel should only ever reflect a destination the user actually
-  // picked (via a suggestion or a submitted search), never stale text.
+  // Typing anything invalidates whatever route was previously previewed - the
+  // panel should only ever reflect a destination the user actually picked
+  // (via a suggestion or a submitted search), never stale text.
   const handleQueryChange = (text: string) => {
     setQuery(text);
     if (routes.length > 0) setRoutes([]);
@@ -246,19 +262,32 @@ export function MapScreen({ navigation }: Props) {
   };
 
   const selectedRoute = routes[selectedRouteIndex];
+  const hazardSummary = summariseRouteHazards({}, T.green, activeHazardClasses);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: T.pageBg }]}>
       <MapView
+        // Android only reads `userInterfaceStyle` when it builds the map
+        // (it becomes a GoogleMapOptions.mapColorScheme at creation), so
+        // toggling Dark Mode has to recreate the view for the basemap to
+        // follow. Remounting loses the camera, hence the tracked `region`
+        // below as the restored starting point.
+        key={darkMode ? 'map-dark' : 'map-light'}
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         showsUserLocation
+        // Keeps the Google basemap in step with the app's Dark Mode setting,
+        // so the chrome floating over it isn't a dark card on a white map.
+        userInterfaceStyle={darkMode ? 'dark' : 'light'}
         onLayout={(e) => setMapSize(e.nativeEvent.layout)}
         onRegionChange={setRegion}
         onRegionChangeComplete={setRegion}
         initialRegion={
-          origin
+          // `region` is whatever the user last had on screen, so a Dark Mode
+          // remount comes back to the same place instead of jumping home.
+          region ??
+          (origin
             ? { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }
             : {
                 // Kuala Lumpur, the study area from the FYP field observation.
@@ -266,7 +295,7 @@ export function MapScreen({ navigation }: Props) {
                 longitude: 101.6869,
                 latitudeDelta: 0.05,
                 longitudeDelta: 0.05,
-              }
+              })
         }
       >
         {routes.map(
@@ -276,7 +305,7 @@ export function MapScreen({ navigation }: Props) {
                 <Polyline
                   coordinates={r.coordinates}
                   strokeWidth={10}
-                  strokeColor={ROUTE_COLORS.unselected.outline}
+                  strokeColor={T.routeAltOutline}
                   lineCap="round"
                   lineJoin="round"
                   tappable
@@ -285,7 +314,7 @@ export function MapScreen({ navigation }: Props) {
                 <Polyline
                   coordinates={r.coordinates}
                   strokeWidth={6}
-                  strokeColor={ROUTE_COLORS.unselected.fill}
+                  strokeColor={T.routeAltFill}
                   lineCap="round"
                   lineJoin="round"
                 />
@@ -298,7 +327,7 @@ export function MapScreen({ navigation }: Props) {
             <Polyline
               coordinates={selectedRoute.coordinates}
               strokeWidth={12}
-              strokeColor={ROUTE_COLORS.selected.outline}
+              strokeColor={T.routeMainOutline}
               lineCap="round"
               lineJoin="round"
               zIndex={2}
@@ -306,7 +335,7 @@ export function MapScreen({ navigation }: Props) {
             <Polyline
               coordinates={selectedRoute.coordinates}
               strokeWidth={7}
-              strokeColor={ROUTE_COLORS.selected.fill}
+              strokeColor={T.routeMainFill}
               lineCap="round"
               lineJoin="round"
               zIndex={3}
@@ -316,144 +345,193 @@ export function MapScreen({ navigation }: Props) {
         )}
       </MapView>
 
-      {/* Route labels are plain React Native views layered over the map,
-          positioned by projecting each route's label coordinate into screen
+      {/* Route pills are plain React Native views layered over the map,
+          positioned by projecting each route's anchor vertex into screen
           space. They deliberately avoid <Marker> custom children, which
           render by snapshotting the child view natively and came out blank
           on this stack (New Architecture + Google provider on iOS). */}
       {region && mapSize && (
         <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
           {routes.map((r, index) => {
-            const isSelected = index === selectedRouteIndex;
-            const point = coordinateToScreenPoint(labelPoints[index], region, mapSize);
-            const left = point.x - ROUTE_LABEL_SIZE.width / 2;
-            const top = point.y - ROUTE_LABEL_SIZE.height / 2;
+            const placement = pillPlacement(routes, index, anchorIndexes, region, mapSize);
+            if (!placement) return null;
 
-            // Skip labels the map has scrolled out of view.
+            const { center, tailAngle } = placement;
+            // Skip pills the map has scrolled out of view.
             if (
-              left < -ROUTE_LABEL_SIZE.width ||
-              top < -ROUTE_LABEL_SIZE.height ||
-              left > mapSize.width ||
-              top > mapSize.height
+              center.x < -PILL_OFFSET ||
+              center.y < -PILL_OFFSET ||
+              center.x > mapSize.width + PILL_OFFSET ||
+              center.y > mapSize.height + PILL_OFFSET
             ) {
               return null;
             }
 
+            const duration = formatDuration(r.durationSeconds);
+            const distance = formatDistance(r.distanceMeters);
+
             return (
-              <Pressable
-                key={`label-${index}`}
-                style={[
-                  styles.routeLabel,
-                  isSelected && styles.routeLabelSelected,
-                  { left, top, zIndex: isSelected ? 2 : 1 },
-                ]}
+              <RoutePill
+                key={`pill-${index}`}
+                duration={duration}
+                distance={distance}
+                selected={index === selectedRouteIndex}
+                center={center}
+                tailAngle={tailAngle}
                 onPress={() => setSelectedRouteIndex(index)}
-              >
-                <Text style={[styles.routeLabelDuration, isSelected && styles.routeLabelTextSelected]}>
-                  {formatDuration(r.durationSeconds)}
-                </Text>
-                <Text style={[styles.routeLabelDistance, isSelected && styles.routeLabelTextSelected]}>
-                  {formatDistance(r.distanceMeters)}
-                </Text>
-              </Pressable>
+                accessibilityLabel={`Route ${index + 1}: ${duration}, ${distance}`}
+              />
             );
           })}
         </View>
       )}
 
       <View style={[styles.searchBar, { top: searchBarTop }]}>
-        <TextInput
-          style={styles.input}
-          placeholder="Search a destination"
-          value={query}
-          onChangeText={handleQueryChange}
-          onFocus={() => setSuggestionsVisible(true)}
-          onBlur={handleBlur}
-          onSubmitEditing={handleSearch}
-          returnKeyType="search"
-        />
-        <View style={styles.inputAccessory} pointerEvents="box-none">
-          {loading ? (
-            <ActivityIndicator color={ROUTE_COLORS.selected.fill} />
-          ) : (
-            query.length > 0 && (
-              <Pressable
-                style={styles.clearButton}
-                onPress={handleClear}
-                accessibilityLabel="Clear search"
-                accessibilityRole="button"
-                hitSlop={8}
-              >
-                <Text style={styles.clearButtonText}>✕</Text>
-              </Pressable>
-            )
-          )}
+        <View
+          style={[styles.searchSurface, { backgroundColor: T.cardRaised }, T.shadow]}
+        >
+          <TextInput
+            style={[styles.input, { color: T.text, fontSize: F.body }]}
+            placeholder="Search a destination"
+            placeholderTextColor={T.text2}
+            value={query}
+            onChangeText={handleQueryChange}
+            onFocus={() => setSuggestionsVisible(true)}
+            onBlur={handleBlur}
+            onSubmitEditing={handleSearch}
+            returnKeyType="search"
+          />
+          {/* Shared absolute-position slot (right edge of the input) for
+              whichever accessory is showing - the clear button, or a spinner
+              while loading. This wrapper stretches full height and centers its
+              child; it must not have a fixed height/width of its own, or
+              combining that with top+bottom makes Yoga anchor it to `top` and
+              ignore `bottom` entirely. */}
+          <View style={styles.inputAccessory} pointerEvents="box-none">
+            {loading ? (
+              <ActivityIndicator color={T.accent} />
+            ) : (
+              query.length > 0 && (
+                <Pressable
+                  style={[styles.clearButton, { backgroundColor: T.clearBtn }]}
+                  onPress={handleClear}
+                  accessibilityLabel="Clear search"
+                  accessibilityRole="button"
+                  hitSlop={8}
+                >
+                  <Text style={styles.clearButtonText}>✕</Text>
+                </Pressable>
+              )
+            )}
+          </View>
         </View>
+
+        {suggestionsVisible && (
+          <View
+            style={[
+              styles.suggestionsBox,
+              { backgroundColor: T.cardRaised, maxHeight: 260 },
+              T.shadow,
+            ]}
+          >
+            {suggestionsLoading && suggestions.length === 0 ? (
+              <View style={styles.suggestionsEmpty}>
+                <ActivityIndicator color={T.accent} />
+              </View>
+            ) : suggestions.length === 0 ? (
+              <View style={styles.suggestionsEmpty}>
+                <Text style={{ color: T.text2, fontSize: F.sm }}>
+                  {query.trim() ? 'No matching places' : 'No nearby places found'}
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={suggestions}
+                keyExtractor={(item) => item.placeId}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <Pressable
+                    style={[styles.suggestionRow, { borderBottomColor: T.sepStrong }]}
+                    onPress={() => handleSelectSuggestion(item)}
+                  >
+                    <Text
+                      style={[styles.suggestionName, { color: T.text, fontSize: F.label }]}
+                      numberOfLines={1}
+                    >
+                      {item.name}
+                    </Text>
+                    {item.secondaryText && (
+                      <Text
+                        style={[styles.suggestionSecondary, { color: T.text2, fontSize: F.xs }]}
+                        numberOfLines={1}
+                      >
+                        {item.secondaryText}
+                      </Text>
+                    )}
+                  </Pressable>
+                )}
+              />
+            )}
+          </View>
+        )}
       </View>
 
-      {suggestionsVisible && (
-        <View style={[styles.suggestionsBox, { top: searchBarTop + 58, maxHeight: 260 }]}>
-          {suggestionsLoading && suggestions.length === 0 ? (
-            <View style={styles.suggestionsEmpty}>
-              <ActivityIndicator />
-            </View>
-          ) : suggestions.length === 0 ? (
-            <View style={styles.suggestionsEmpty}>
-              <Text style={styles.suggestionsEmptyText}>
-                {query.trim() ? 'No matching places' : 'No nearby places found'}
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              data={suggestions}
-              keyExtractor={(item) => item.placeId}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => (
-                <Pressable style={styles.suggestionRow} onPress={() => handleSelectSuggestion(item)}>
-                  <Text style={styles.suggestionName} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  {item.secondaryText && (
-                    <Text style={styles.suggestionSecondary} numberOfLines={1}>
-                      {item.secondaryText}
-                    </Text>
-                  )}
-                </Pressable>
-              )}
-            />
-          )}
-        </View>
-      )}
-
-      {routes.length > 0 && selectedRoute && !suggestionsVisible && (
-        <View style={[styles.routePanel, { bottom: 24 + keyboardHeight }]}>
-          <Text style={styles.routeName} numberOfLines={1}>
+      {selectedRoute && !suggestionsVisible && (
+        <View
+          style={[
+            styles.routePanel,
+            { backgroundColor: T.cardRaised, bottom: SCREEN_MARGIN + keyboardHeight },
+            T.panelShadow,
+          ]}
+        >
+          <Text style={[styles.routeName, { color: T.text, fontSize: F.h2 }]} numberOfLines={1}>
             {selectedRoute.destinationName}
           </Text>
-          {selectedRoute.destinationAddress && (
-            <Text style={styles.routeAddress} numberOfLines={1}>
-              {selectedRoute.destinationAddress}
+          {/* The design's secondary line is the route summary ("Via Jalan
+              Sultan Ismail"); the exact address takes priority here because
+              the app already promises to always show it, with the summary as
+              the fallback when Google returns no address. */}
+          {(selectedRoute.destinationAddress ?? selectedRoute.summary) && (
+            <Text style={[styles.routeSecondary, { color: T.text2, fontSize: F.xs }]} numberOfLines={1}>
+              {selectedRoute.destinationAddress ?? selectedRoute.summary}
             </Text>
           )}
-          <Text style={styles.routeStats}>
-            {formatDuration(selectedRoute.durationSeconds)} · {formatDistance(selectedRoute.distanceMeters)}
+          <Text style={[styles.routeStats, { color: T.accentDeep, fontSize: F.label }]}>
+            {formatDuration(selectedRoute.durationSeconds)} ·{' '}
+            {formatDistance(selectedRoute.distanceMeters)}
           </Text>
+
+          <View style={styles.hazardNoteRow}>
+            <View style={[styles.hazardDot, { backgroundColor: hazardSummary.color }]} />
+            <Text style={[styles.hazardNote, { color: T.text2, fontSize: F.tinySm }]}>
+              {hazardSummary.note}
+            </Text>
+          </View>
+
           <Pressable
-            style={styles.startButton}
+            style={[styles.startButton, { backgroundColor: T.green }]}
             onPress={() => navigation.navigate('ARNavigation', { route: selectedRoute })}
+            accessibilityRole="button"
           >
-            <Text style={styles.startButtonText}>Start AR Navigation</Text>
+            <Text style={[styles.startButtonText, { fontSize: F.body }]}>Start AR Navigation</Text>
           </Pressable>
         </View>
       )}
 
       {warning && (
         <View style={styles.warningBackdrop}>
-          <View style={styles.warningCard}>
-            <Text style={styles.warningTitle}>{warning.title}</Text>
-            <Text style={styles.warningMessage}>{warning.message}</Text>
-            <Pressable style={styles.warningButton} onPress={() => setWarning(null)}>
-              <Text style={styles.warningButtonText}>OK</Text>
+          <View style={[styles.warningCard, { backgroundColor: T.cardRaised }, T.shadow]}>
+            <Text style={[styles.warningTitle, { color: T.text, fontSize: F.h2 }]}>
+              {warning.title}
+            </Text>
+            <Text style={[styles.warningMessage, { color: T.text2, fontSize: F.sm }]}>
+              {warning.message}
+            </Text>
+            <Pressable
+              style={[styles.warningButton, { backgroundColor: T.accent }]}
+              onPress={() => setWarning(null)}
+            >
+              <Text style={[styles.warningButtonText, { fontSize: F.label }]}>OK</Text>
             </Pressable>
           </View>
         </View>
@@ -462,37 +540,100 @@ export function MapScreen({ navigation }: Props) {
   );
 }
 
+// Works out where a route's pill sits and which way its tail points: the pill
+// is pushed off its anchor vertex perpendicular to the route's local
+// direction, and the tail then points straight back at that vertex.
+function pillPlacement(
+  routes: WalkingRoute[],
+  index: number,
+  anchorIndexes: number[],
+  region: MapRegion,
+  mapSize: { width: number; height: number },
+): { center: { x: number; y: number }; tailAngle: number } | null {
+  const coordinates = routes[index]?.coordinates;
+  const anchorIndex = anchorIndexes[index];
+  if (!coordinates || coordinates.length === 0 || anchorIndex === undefined) return null;
+
+  const project = (coordinate: LatLng) => coordinateToScreenPoint(coordinate, region, mapSize);
+  const anchor = project(coordinates[anchorIndex]);
+
+  const before = project(coordinates[Math.max(0, anchorIndex - DIRECTION_SAMPLE_SPAN)]);
+  const after = project(
+    coordinates[Math.min(coordinates.length - 1, anchorIndex + DIRECTION_SAMPLE_SPAN)],
+  );
+
+  let dx = after.x - before.x;
+  let dy = after.y - before.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) {
+    // Degenerate stretch (all sampled vertices project to the same pixel) -
+    // fall back to pushing the pill straight up.
+    dx = 1;
+    dy = 0;
+  } else {
+    dx /= length;
+    dy /= length;
+  }
+
+  // Two candidate sides of the route; pick whichever lands further from the
+  // other routes, so alternatives' pills don't stack on top of each other.
+  const candidates = [
+    { x: anchor.x - dy * PILL_OFFSET, y: anchor.y + dx * PILL_OFFSET },
+    { x: anchor.x + dy * PILL_OFFSET, y: anchor.y - dx * PILL_OFFSET },
+  ];
+
+  const others = routes.filter((_, i) => i !== index);
+  const center =
+    others.length === 0
+      ? candidates[0]
+      : candidates.reduce((best, candidate) =>
+          clearance(candidate, others, project) > clearance(best, others, project)
+            ? candidate
+            : best,
+        );
+
+  const tailAngle = (Math.atan2(anchor.y - center.y, anchor.x - center.x) * 180) / Math.PI;
+  return { center, tailAngle };
+}
+
+// Smallest screen-space distance from `point` to any of the other routes,
+// sampled rather than measured against every vertex.
+function clearance(
+  point: { x: number; y: number },
+  others: WalkingRoute[],
+  project: (coordinate: LatLng) => { x: number; y: number },
+): number {
+  let nearest = Infinity;
+  for (const other of others) {
+    const step = Math.max(1, Math.floor(other.coordinates.length / 24));
+    for (let i = 0; i < other.coordinates.length; i += step) {
+      const projected = project(other.coordinates[i]);
+      const d = Math.hypot(projected.x - point.x, projected.y - point.y);
+      if (d < nearest) nearest = d;
+    }
+  }
+  return nearest;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
   searchBar: {
     // top is set inline, from the safe-area inset.
     position: 'absolute',
-    left: 16,
-    right: 16,
+    left: SCREEN_MARGIN,
+    right: SCREEN_MARGIN,
+    zIndex: 5,
   },
+  searchSurface: { borderRadius: RADIUS.control },
   input: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingRight: 40,
-    paddingVertical: 12,
-    fontSize: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
+    paddingLeft: 16,
+    paddingRight: 44,
+    paddingVertical: 15,
   },
-  // Shared absolute-position slot (right edge of the input) for whichever
-  // accessory is showing - the clear button, or a spinner while loading.
-  // This wrapper stretches full height and centers its child; it must not
-  // have a fixed height/width of its own, or combining that with top+bottom
-  // makes Yoga anchor it to `top` and ignore `bottom` entirely (which is
-  // what made the clear button hug the top of the search bar before).
   inputAccessory: {
     position: 'absolute',
-    right: 10,
+    right: 12,
     top: 0,
     bottom: 0,
     alignItems: 'center',
@@ -502,94 +643,47 @@ const styles = StyleSheet.create({
     height: 24,
     width: 24,
     borderRadius: 12,
-    backgroundColor: '#C7C7CC',
     alignItems: 'center',
     justifyContent: 'center',
   },
   clearButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   suggestionsBox: {
-    // top is set inline, relative to the search bar's own (safe-area-based) top.
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    backgroundColor: '#fff',
-    borderRadius: 12,
+    marginTop: 8,
+    borderRadius: RADIUS.control,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
   },
-  suggestionsEmpty: {
-    paddingVertical: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  suggestionsEmptyText: { color: '#888', fontSize: 14 },
+  suggestionsEmpty: { paddingVertical: 20, alignItems: 'center', justifyContent: 'center' },
   suggestionRow: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E0E0E0',
   },
-  suggestionName: { fontSize: 15, fontWeight: '600', color: '#111' },
-  suggestionSecondary: { fontSize: 13, color: '#777', marginTop: 2 },
-  // Positioned absolutely over the map; `left`/`top` are supplied inline
-  // from the projected screen coordinate. Fixed size keeps that centering
-  // math simple (the projected point is the pill's center).
-  routeLabel: {
-    position: 'absolute',
-    width: ROUTE_LABEL_SIZE.width,
-    height: ROUTE_LABEL_SIZE.height,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 6,
-  },
-  routeLabelSelected: {
-    backgroundColor: '#0020d2',
-  },
-  routeLabelDuration: { fontSize: 13, fontWeight: '700', color: '#000' },
-  routeLabelDistance: { fontSize: 11, fontWeight: '600', color: '#000', marginTop: 1 },
-  routeLabelTextSelected: { color: '#fff' },
+  suggestionName: { fontWeight: '600' },
+  suggestionSecondary: { marginTop: 2 },
   routePanel: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    paddingTop: 14,
+    left: SCREEN_MARGIN,
+    right: SCREEN_MARGIN,
+    borderRadius: RADIUS.section,
+    paddingTop: 18,
     paddingBottom: 16,
-    paddingHorizontal: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
+    paddingHorizontal: 18,
   },
-  routeName: { fontSize: 17, fontWeight: '700', color: '#111' },
-  routeAddress: { fontSize: 13, color: '#777', marginTop: 2 },
-  routeStats: { fontSize: 15, fontWeight: '600', color: ROUTE_COLORS.selected.outline, marginTop: 8 },
+  routeName: { fontWeight: '700' },
+  routeSecondary: { marginTop: 2 },
+  routeStats: { fontWeight: '600', marginTop: 10 },
+  hazardNoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  hazardDot: { width: 8, height: 8, borderRadius: 4 },
+  hazardNote: { flex: 1 },
   startButton: {
-    marginTop: 12,
-    backgroundColor: '#30D158',
-    borderRadius: 10,
-    paddingVertical: 12,
+    marginTop: 14,
+    borderRadius: RADIUS.button,
+    paddingVertical: 14,
     alignItems: 'center',
   },
-  startButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  startButtonText: { color: '#fff', fontWeight: '700' },
   warningBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -598,33 +692,20 @@ const styles = StyleSheet.create({
   warningCard: {
     width: '100%',
     maxWidth: 320,
-    backgroundColor: '#fff',
-    borderRadius: 16,
+    borderRadius: RADIUS.card,
     paddingTop: 20,
     paddingBottom: 16,
     paddingHorizontal: 20,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
   },
-  warningTitle: { fontSize: 17, fontWeight: '700', color: '#111', textAlign: 'center' },
-  warningMessage: {
-    fontSize: 14,
-    color: '#555',
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 20,
-  },
+  warningTitle: { fontWeight: '700', textAlign: 'center' },
+  warningMessage: { textAlign: 'center', marginTop: 8, lineHeight: 20 },
   warningButton: {
     marginTop: 18,
     alignSelf: 'stretch',
-    backgroundColor: ROUTE_COLORS.selected.fill,
-    borderRadius: 10,
+    borderRadius: RADIUS.small,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  warningButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  warningButtonText: { color: '#fff', fontWeight: '700' },
 });
