@@ -1,13 +1,14 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Rabbit, Turtle } from 'lucide-react-native';
 import { SegmentedField } from '../components/SegmentedField';
 import { HAZARD_ICONS } from '../components/hazardIcons';
 import { useSettings } from '../theme/SettingsContext';
 import {
   MOBILITY_AIDS,
+  MOBILITY_AID_DESCRIPTIONS,
   MOBILITY_AID_LABELS,
-  describeAidPace,
 } from '../services/mobility';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN, type FontScaleKey } from '../theme/tokens';
 import { HAZARD_CLASSES, HAZARD_SETTING_LABELS } from '../types/hazard';
@@ -97,6 +98,18 @@ export function SettingsScreen() {
       <SectionLabel>Mobility aid</SectionLabel>
       <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
         <View style={styles.row}>
+          {/* The segments run fastest to slowest, so the two ends are marked
+              with a hare and a tortoise. Announced as one label rather than
+              two loose icons, since a screen reader reading "rabbit, turtle"
+              on its own says nothing about what the control does. */}
+          <View
+            style={styles.paceScale}
+            accessible
+            accessibilityLabel="Ordered from fastest to slowest"
+          >
+            <Rabbit size={18} color={T.text2} strokeWidth={2} />
+            <Turtle size={18} color={T.text2} strokeWidth={2} />
+          </View>
           <SegmentedField
             values={MOBILITY_AIDS.map((aid) => MOBILITY_AID_LABELS[aid])}
             selectedIndex={MOBILITY_AIDS.indexOf(mobilityAid)}
@@ -106,7 +119,7 @@ export function SettingsScreen() {
           {/* Spelled out because the setting is otherwise invisible: it only
               shows up as different numbers on the route panel. */}
           <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm, marginTop: 10 }]}>
-            {describeAidPace(mobilityAid)}
+            {MOBILITY_AID_DESCRIPTIONS[mobilityAid]}
           </Text>
         </View>
       </View>
@@ -173,6 +186,14 @@ const styles = StyleSheet.create({
   rowTextBlock: { flex: 1 },
   rowTitle: { fontWeight: '600' },
   rowSubtitle: { marginTop: 2 },
+  paceScale: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    // Inset so each icon sits over the middle of its end segment rather than
+    // hard against the control's rounded corner.
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+  },
   hazardList: { gap: 8, paddingHorizontal: SCREEN_MARGIN, paddingBottom: 20 },
   hazardRow: {
     borderRadius: RADIUS.control,

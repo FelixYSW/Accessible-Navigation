@@ -13,7 +13,7 @@ import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { VoiceGuidancePill } from '../components/VoiceGuidancePill';
 import { useSettings } from '../theme/SettingsContext';
-import { adjustDurationForAid } from '../services/mobility';
+import { routeDurationSeconds } from '../services/mobility';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { formatDistance, formatDuration } from '../utils/format';
 
@@ -67,7 +67,12 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // Rescaled to the pace implied by the Mobility aid setting, so the time
   // left here matches the estimate the user chose this route on.
   const remainingSeconds =
-    adjustDurationForAid(walkingRoute.durationSeconds, mobilityAid) * (1 - progress);
+    routeDurationSeconds(
+      walkingRoute.durationSeconds,
+      mobilityAid,
+      Boolean(walkingRoute.accessibleFor),
+    ) *
+    (1 - progress);
 
   const exit = () => navigation.goBack();
 

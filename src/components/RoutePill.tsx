@@ -1,114 +1,82 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { Marker } from 'react-native-maps';
-import type { LatLng } from '../types/route';
-import { useSettings } from '../theme/SettingsContext';
-import { FONT_SCALES } from '../theme/tokens';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useTheme } from '../theme/SettingsContext';
 
-// react-native-maps draws a custom marker child by snapshotting the React
-// Native view into a native marker image. It has to be told to keep
-// re-snapshotting while the view is still settling, or it captures an empty
-// frame and the marker shows up blank - but leaving it on permanently
-// re-snapshots continuously, which is exactly the cost the native marker is
-// here to avoid. So it snapshots for a moment after anything visible changes,
-// then stops.
-const SNAPSHOT_WINDOW_MS = 600;
-
-// The pill is given explicit dimensions rather than being sized by its text:
-// a view sized purely by intrinsic content can measure 0x0 at snapshot time
-// on iOS, which is the other way this renders blank. Scaled by the Text Size
-// setting so the label doesn't outgrow its box at Extra Large.
-const BASE_PILL_SIZE = { width: 96, height: 46 };
+// The pill sits inside a fixed-size transparent box centred on its anchor
+// point, so it can be centred without first measuring it - the text inside
+// changes width with the duration and with the Text Size setting. The box is
+// `box-none`, so the empty space around the pill stays transparent to touch
+// and the map underneath still pans normally.
+//
+// Sized to fit the widest pill the Extra Large text setting can produce
+// ("1 hr 25 min"), and also used as the off-screen culling margin in
+// RoutePillLayer.
+export const PILL_FRAME = 130;
 
 interface RoutePillProps {
-  /** The point on the route the pill is centred on. */
-  coordinate: LatLng;
   duration: string;
   distance: string;
   selected: boolean;
+  /** Screen position the pill is centred on. */
+  center: { x: number; y: number };
   onPress: () => void;
   accessibilityLabel: string;
 }
 
-// A route's time/distance badge, rendered as a real map marker so the map
-// itself keeps it glued to its coordinate. The previous version was a plain
-// view layered over the map and positioned in JS from `onRegionChange`, which
-// meant it always trailed the map by a frame or two while panning and drifted
-// off its line entirely once the camera was rotated or tilted - the
-// projection had no way to know about either.
 export function RoutePill({
-  coordinate,
   duration,
   distance,
   selected,
+  center,
   onPress,
   accessibilityLabel,
 }: RoutePillProps) {
-  const { T, F, fontScale, darkMode } = useSettings();
-
-  const scale = FONT_SCALES[fontScale];
-  const size = {
-    width: Math.round(BASE_PILL_SIZE.width * scale),
-    height: Math.round(BASE_PILL_SIZE.height * scale),
-  };
+  const { T, F } = useTheme();
 
   const background = selected ? T.pillSelected : T.card;
   const foreground = selected ? '#fff' : T.text;
 
-  const tracksViewChanges = useSnapshotWindow(
-    `${duration}|${distance}|${selected}|${darkMode}|${fontScale}`,
-  );
-
   return (
-    <Marker
-      coordinate={coordinate}
-      // Centre the pill on the point, matching how it was positioned before.
-      anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={tracksViewChanges}
-      onPress={onPress}
-      // The chosen route's pill wins any overlap with an alternative's.
-      zIndex={selected ? 2 : 1}
-      accessibilityLabel={accessibilityLabel}
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.frame,
+        {
+          left: center.x - PILL_FRAME / 2,
+          top: center.y - PILL_FRAME / 2,
+          // The chosen route's pill wins any overlap with an alternative's.
+          zIndex: selected ? 2 : 1,
+        },
+      ]}
     >
-      <View style={[styles.pill, size, { backgroundColor: background }]}>
-        <Text
-          style={[styles.duration, { color: foreground, fontSize: F.xs }]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-        >
-          {duration}
-        </Text>
-        <Text
-          style={[styles.distance, { color: foreground, fontSize: F.micro }]}
-          numberOfLines={1}
-        >
-          {distance}
-        </Text>
-      </View>
-    </Marker>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        accessibilityLabel={accessibilityLabel}
+        style={[styles.pill, { backgroundColor: background }]}
+      >
+        <Text style={[styles.duration, { color: foreground, fontSize: F.xs }]}>{duration}</Text>
+        <Text style={[styles.distance, { color: foreground, fontSize: F.micro }]}>{distance}</Text>
+      </Pressable>
+    </View>
   );
-}
-
-// True for a short window after `signature` changes, so the marker re-snapshots
-// while the new content lays out and then settles into a static image.
-function useSnapshotWindow(signature: string): boolean {
-  const [tracking, setTracking] = useState(true);
-
-  useEffect(() => {
-    setTracking(true);
-    const timeout = setTimeout(() => setTracking(false), SNAPSHOT_WINDOW_MS);
-    return () => clearTimeout(timeout);
-  }, [signature]);
-
-  return tracking;
 }
 
 const styles = StyleSheet.create({
-  pill: {
-    borderRadius: 10,
+  frame: {
+    position: 'absolute',
+    width: PILL_FRAME,
+    height: PILL_FRAME,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 6,
+  },
+  pill: {
+    borderRadius: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    minWidth: 74,
+    alignItems: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.3,
     shadowRadius: 4,

@@ -10,6 +10,43 @@ function toDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
+export interface MapRegion {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
+
+// Web Mercator's vertical axis. Longitude maps linearly across the screen,
+// but latitude does not - projecting through Mercator is what keeps a
+// screen-space overlay pinned to the right spot on the map as it zooms.
+function mercatorY(latitude: number): number {
+  const clamped = Math.max(Math.min(latitude, 89.9), -89.9);
+  return Math.log(Math.tan(Math.PI / 4 + toRadians(clamped) / 2));
+}
+
+// Projects a geographic coordinate to an x/y pixel offset inside a map view
+// of `size` currently showing `region`, so plain React Native views can be
+// positioned on top of the map at real-world locations.
+//
+// `region` carries only a centre and a lat/lng span - it says nothing about
+// the camera's heading or pitch, so this is only correct for a north-up, flat
+// map. MapScreen disables the rotate and tilt gestures to keep that true.
+export function coordinateToScreenPoint(
+  coordinate: LatLng,
+  region: MapRegion,
+  size: { width: number; height: number },
+): { x: number; y: number } {
+  const west = region.longitude - region.longitudeDelta / 2;
+  const x = ((coordinate.longitude - west) / region.longitudeDelta) * size.width;
+
+  const top = mercatorY(region.latitude + region.latitudeDelta / 2);
+  const bottom = mercatorY(region.latitude - region.latitudeDelta / 2);
+  const y = ((top - mercatorY(coordinate.latitude)) / (top - bottom)) * size.height;
+
+  return { x, y };
+}
+
 // Picks the point along a route best suited to carrying its label: the
 // vertex furthest from every other route, so overlapping alternatives get
 // labels on the stretches where they actually diverge (mirroring how
@@ -45,6 +82,77 @@ export function labelAnchorIndexForRoute(routes: LatLng[][], index: number): num
   }
 
   return best;
+}
+
+// Thins a route polyline down to a set of points spaced at least
+// `minSpacingMeters` apart, capped at `maxPoints`. Route geometry runs to
+// hundreds of vertices bunched around corners, which is far more precision
+// than a proximity query needs and would make the request body enormous.
+// The first and last points are always kept.
+export function samplePolyline(
+  coordinates: LatLng[],
+  minSpacingMeters: number,
+  maxPoints: number,
+): LatLng[] {
+  if (coordinates.length <= 2) return [...coordinates];
+
+  const kept: LatLng[] = [coordinates[0]];
+  for (let i = 1; i < coordinates.length - 1; i += 1) {
+    if (distanceMeters(kept[kept.length - 1], coordinates[i]) >= minSpacingMeters) {
+      kept.push(coordinates[i]);
+    }
+  }
+  kept.push(coordinates[coordinates.length - 1]);
+
+  if (kept.length <= maxPoints) return kept;
+
+  // Still too many on a long route - drop to an evenly spaced subset rather
+  // than truncating, so the whole route stays covered.
+  const step = (kept.length - 1) / (maxPoints - 1);
+  return Array.from({ length: maxPoints }, (_, i) => kept[Math.round(i * step)]);
+}
+
+// How closely two routes follow the same ground, as a 0-1 fraction.
+//
+// Used to reconcile an OpenRouteService accessible route with Google's
+// alternatives: the two engines route over different graphs (ORS uses OSM
+// sidewalk ways where they are mapped, Google often road centrelines), so
+// geometry that means "the same street" can differ by a pavement's width.
+//
+// Scored symmetrically - the fraction of each route lying close to the other,
+// then the worse of the two. One-directional coverage would call a short route
+// a match for a long one that happens to contain it.
+export function routeSimilarity(
+  a: LatLng[],
+  b: LatLng[],
+  toleranceMeters: number,
+): number {
+  if (a.length === 0 || b.length === 0) return 0;
+
+  // Both sides are thinned first: this is O(n*m), and raw route geometry runs
+  // to hundreds of vertices. `b` keeps the finer spacing because it is what
+  // distances are measured against, and it is sampled by vertex rather than
+  // interpolated - so its points must be closer together than the tolerance.
+  const coarseA = samplePolyline(a, toleranceMeters, 150);
+  const coarseB = samplePolyline(b, toleranceMeters, 150);
+  const fineA = samplePolyline(a, toleranceMeters / 3, 400);
+  const fineB = samplePolyline(b, toleranceMeters / 3, 400);
+
+  return Math.min(
+    coverage(coarseA, fineB, toleranceMeters),
+    coverage(coarseB, fineA, toleranceMeters),
+  );
+}
+
+// Fraction of `points` lying within `tolerance` of any point in `against`.
+// `against` is sampled finely by the caller, since distance is measured to its
+// vertices rather than to its segments.
+function coverage(points: LatLng[], against: LatLng[], tolerance: number): number {
+  let near = 0;
+  for (const point of points) {
+    if (against.some((other) => distanceMeters(point, other) <= tolerance)) near += 1;
+  }
+  return near / points.length;
 }
 
 export function distanceMeters(a: LatLng, b: LatLng): number {

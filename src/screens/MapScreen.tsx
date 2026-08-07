@@ -24,12 +24,24 @@ import {
   getPlaceDetails,
   getWalkingRoutes,
 } from '../services/directions';
-import { adjustDurationForAid } from '../services/mobility';
+import { routeDurationSeconds, type MobilityAid } from '../services/mobility';
+import {
+  needsAccessibilityCheck,
+  screenRoutes,
+  type AccessibilitySeverity,
+  type RouteAccessibility,
+} from '../services/accessibility';
 import { formatDistance, formatDuration } from '../utils/format';
-import { labelAnchorIndexForRoute } from '../utils/geo';
-import { RoutePill } from '../components/RoutePill';
+import { labelAnchorIndexForRoute, routeSimilarity } from '../utils/geo';
+import {
+  findAccessibleRoute,
+  hasAccessibleRoutingKey,
+  NoAccessibleRouteError,
+} from '../services/accessibleRouting';
+import { RoutePillLayer } from '../components/RoutePillLayer';
+import type { RoutePillDescriptor, RoutePillLayerHandle } from '../components/RoutePillLayer';
 import { useSettings } from '../theme/SettingsContext';
-import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
+import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN, type Palette } from '../theme/tokens';
 
 // How long to wait after the user stops typing before firing an
 // autocomplete request, to avoid a network call on every keystroke.
@@ -51,10 +63,36 @@ const PILL_CLEARANCE = { horizontal: 50, vertical: 34 };
 const ESTIMATED_SEARCH_HEIGHT = 52;
 const ESTIMATED_PANEL_HEIGHT = 190;
 
+// How close ORS's accessible route has to run to one of Google's alternatives
+// before the two are called the same route. Generous, because the engines
+// disagree about which side of a street a pedestrian is on: ORS follows mapped
+// sidewalk ways, Google usually the road centreline.
+const ROUTE_MATCH_TOLERANCE_METERS = 30;
+const ROUTE_MATCH_THRESHOLD = 0.75;
+
+// Named per aid, because "step-free" is the wrong promise for a cane user -
+// their route is allowed to include steps and is chosen on gradient and
+// surface instead.
+const ACCESSIBLE_ROUTE_LABELS: Record<MobilityAid, string> = {
+  none: '',
+  wheelchair: 'Step-free route, planned for wheelchair access',
+  walker: 'Step-free route, planned for walker access',
+  cane: 'Planned for even gradients and firm surfaces',
+};
+
+// Dot colour for each accessibility verdict. The two warning colours are the
+// hazard palette's, so a barrier reads the same here as it does on camera.
+const ACCESS_COLORS: Record<AccessibilitySeverity, (palette: Palette) => string> = {
+  clear: (T) => T.green,
+  caution: () => HAZARD_COLORS['pathway-obstruction'],
+  blocked: () => HAZARD_COLORS.pothole,
+};
+
 type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 
 export function MapScreen() {
   const mapRef = useRef<MapView>(null);
+  const pillLayerRef = useRef<RoutePillLayerHandle>(null);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<MapNavigation>();
   const { T, F, darkMode, mobilityAid } = useSettings();
@@ -72,6 +110,18 @@ export function MapScreen() {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
+  // OSM accessibility screening, one entry per route (null where the lookup
+  // failed - "unknown", which must never be presented as "clear").
+  const [accessibility, setAccessibility] = useState<(RouteAccessibility | null)[]>([]);
+  const [screening, setScreening] = useState(false);
+  // The accessibility-aware route from OpenRouteService. Held apart from
+  // `routes` (which is Google's answer) so that appending it can't retrigger
+  // the effects keyed on `routes` and loop.
+  const [accessibleRoute, setAccessibleRoute] = useState<WalkingRoute | null>(null);
+  // Set instead when ORS's route turned out to be one Google already offered.
+  const [accessibleMatch, setAccessibleMatch] = useState<number | null>(null);
+  const [routingAccessible, setRoutingAccessible] = useState(false);
+  const [noAccessibleRoute, setNoAccessibleRoute] = useState(false);
   // Measured heights of the two floating panels, so routes can be framed in
   // the strip of map that is actually visible between them. Both change with
   // the Text Size setting, so they are measured rather than hard-coded. Held
@@ -79,23 +129,56 @@ export function MapScreen() {
   // a measurement must never re-render or re-frame on its own.
   const chromeHeights = useRef({ search: 0, panel: 0 });
 
+  // What the map actually shows: Google's routes, plus ORS's accessible route
+  // when it found one Google didn't already offer.
+  const displayRoutes = useMemo(
+    () => (accessibleRoute ? [...routes, accessibleRoute] : routes),
+    [routes, accessibleRoute],
+  );
+
   // The vertex each route's pill is anchored to - recomputed only when the
   // route set changes, since the search is O(n*m) over route vertices.
   const anchorIndexes = useMemo(
     () =>
-      routes.map((_, index) =>
+      displayRoutes.map((_, index) =>
         labelAnchorIndexForRoute(
-          routes.map((r) => r.coordinates),
+          displayRoutes.map((r) => r.coordinates),
           index,
         ),
       ),
-    [routes],
+    [displayRoutes],
   );
 
   // Every duration on this screen is rescaled from Google's able-bodied
   // walking pace to the pace implied by the user's Mobility aid setting.
   const durationForRoute = (walkingRoute: WalkingRoute) =>
-    formatDuration(adjustDurationForAid(walkingRoute.durationSeconds, mobilityAid));
+    formatDuration(
+      routeDurationSeconds(
+        walkingRoute.durationSeconds,
+        mobilityAid,
+        Boolean(walkingRoute.accessibleFor),
+      ),
+    );
+
+  // The pills' content, computed here so the layer re-renders on a pan
+  // without rebuilding any of it.
+  const pills = useMemo<RoutePillDescriptor[]>(
+    () =>
+      displayRoutes.flatMap((r, index) => {
+        const coordinate = r.coordinates[anchorIndexes[index]];
+        if (!coordinate) return [];
+        return [
+          {
+            coordinate,
+            duration: formatDuration(
+              routeDurationSeconds(r.durationSeconds, mobilityAid, Boolean(r.accessibleFor)),
+            ),
+            distance: formatDistance(r.distanceMeters),
+          },
+        ];
+      }),
+    [displayRoutes, anchorIndexes, mobilityAid],
+  );
 
   // In-app replacement for Alert.alert - keeps error/notice styling
   // consistent with the rest of the screen instead of the OS-native dialog.
@@ -236,11 +319,13 @@ export function MapScreen() {
   // Re-framed only when a fresh set of routes arrives - never on re-selection,
   // since the camera shouldn't jump just because the user picked a different
   // alternative that's already in view.
+  // Keyed on `displayRoutes`, so an accessible route arriving from ORS a few
+  // seconds later is framed too rather than appearing half off-screen.
   const fittedRoutes = useRef<WalkingRoute[]>([]);
   useEffect(() => {
-    fittedRoutes.current = routes;
-    fitRoutes(routes);
-  }, [routes, fitRoutes]);
+    fittedRoutes.current = displayRoutes;
+    fitRoutes(displayRoutes);
+  }, [displayRoutes, fitRoutes]);
 
   // The first search runs against the estimated panel heights, because
   // neither panel has been laid out yet. Once a real measurement replaces an
@@ -253,6 +338,118 @@ export function MapScreen() {
     chromeHeights.current[key] = height;
     if (wasEstimated) fitRoutes(fittedRoutes.current);
   };
+
+  // Asks OpenRouteService for a route planned around the barriers that matter
+  // for this aid, then reconciles it with what Google returned. Three outcomes:
+  //
+  //   - it matches one of Google's alternatives  -> that one is labelled and
+  //     selected, and the user keeps Google's geometry and ETA
+  //   - it doesn't match any of them             -> it is added as an extra
+  //     option, which is the interesting case: a way through that Google
+  //     never offered
+  //   - ORS can't find one at all                -> said plainly, rather than
+  //     leaving the user to infer it from three warnings
+  //
+  // Runs alongside the OSM screening below rather than replacing it: this says
+  // "here is a route you can use", the screening says "here is what is wrong
+  // with the others".
+  const accessibleChosen = useRef(false);
+  useEffect(() => {
+    setAccessibleRoute(null);
+    setAccessibleMatch(null);
+    setNoAccessibleRoute(false);
+    accessibleChosen.current = false;
+
+    if (routes.length === 0 || mobilityAid === 'none' || !hasAccessibleRoutingKey()) return;
+
+    const reference = routes[0];
+    let cancelled = false;
+    setRoutingAccessible(true);
+
+    (async () => {
+      try {
+        const candidate = await findAccessibleRoute(
+          reference.origin,
+          reference.destination,
+          reference.destinationName,
+          mobilityAid,
+          reference.destinationAddress,
+        );
+        if (cancelled) return;
+
+        const scores = routes.map((r) =>
+          routeSimilarity(candidate.coordinates, r.coordinates, ROUTE_MATCH_TOLERANCE_METERS),
+        );
+        const best = scores.reduce((a, b, i) => (b > scores[a] ? i : a), 0);
+
+        accessibleChosen.current = true;
+        if (scores[best] >= ROUTE_MATCH_THRESHOLD) {
+          setAccessibleMatch(best);
+          setSelectedRouteIndex(best);
+        } else {
+          setAccessibleRoute(candidate);
+          // It is the whole point of the request - select it.
+          setSelectedRouteIndex(routes.length);
+        }
+      } catch (error) {
+        if (!cancelled && error instanceof NoAccessibleRouteError) setNoAccessibleRoute(true);
+        // Anything else is a network or key problem: stay quiet and leave the
+        // OSM screening below to describe Google's routes.
+      } finally {
+        if (!cancelled) setRoutingAccessible(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routes, mobilityAid]);
+
+  // Screens every previewed route against OpenStreetMap once the routes are
+  // already on screen, rather than before showing them: Overpass can take
+  // several seconds, and a route the user can see and start walking beats a
+  // spinner. The panel says it is still checking until the answers land.
+  useEffect(() => {
+    if (routes.length === 0 || !needsAccessibilityCheck(mobilityAid)) {
+      setAccessibility([]);
+      setScreening(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAccessibility([]);
+    setScreening(true);
+
+    (async () => {
+      const results = await screenRoutes(
+        routes.map((r) => r.coordinates),
+        mobilityAid,
+      );
+      if (cancelled) return;
+
+      setAccessibility(results);
+      setScreening(false);
+
+      // Move the user off a route the screening says they can't use, if one
+      // of the alternatives is passable. The route order is left alone - the
+      // map reshuffling under a selection the user just made is worse than
+      // simply picking a better one for them.
+      //
+      // Skipped once ORS has supplied a route planned around the barriers:
+      // that is stronger evidence than this screening, and the two effects
+      // would otherwise take turns overriding each other's selection.
+      if (accessibleChosen.current) return;
+      setSelectedRouteIndex((current) => {
+        if (results[current]?.severity !== 'blocked') return current;
+        const passable = results.findIndex((r) => r !== null && r.severity !== 'blocked');
+        return passable === -1 ? current : passable;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routes, mobilityAid]);
 
   const previewRoutes = async (
     destination: LatLng,
@@ -329,7 +526,11 @@ export function MapScreen() {
     setTimeout(() => setSuggestionsVisible(false), 150);
   };
 
-  const selectedRoute = routes[selectedRouteIndex];
+  const selectedRoute = displayRoutes[selectedRouteIndex];
+  // The selected route is accessibility-planned either because it *is* ORS's
+  // route, or because ORS's route turned out to be this one of Google's.
+  const selectedIsAccessible =
+    Boolean(selectedRoute?.accessibleFor) || accessibleMatch === selectedRouteIndex;
 
   return (
     <View style={[styles.container, { backgroundColor: T.pageBg }]}>
@@ -346,6 +547,18 @@ export function MapScreen() {
         // throw away the camera and drop the user back at a default view every
         // time they toggled Dark Mode.
         userInterfaceStyle={darkMode ? 'dark' : 'light'}
+        // The pills are positioned from `region`, which carries a centre and a
+        // lat/lng span but no heading or pitch. Rotating or tilting the camera
+        // would leave that projection describing a map orientation the user is
+        // no longer looking at, and the pills would slide off their routes -
+        // so neither gesture is offered. Walking navigation has no use for
+        // them anyway.
+        rotateEnabled={false}
+        pitchEnabled={false}
+        // Fed straight to the pill layer instead of into state here, so a pan
+        // re-renders three pills rather than this whole screen.
+        onRegionChange={(r) => pillLayerRef.current?.setRegion(r)}
+        onRegionChangeComplete={(r) => pillLayerRef.current?.setRegion(r)}
         initialRegion={
           origin
             ? { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }
@@ -358,7 +571,7 @@ export function MapScreen() {
               }
         }
       >
-        {routes.map(
+        {displayRoutes.map(
           (r, index) =>
             index !== selectedRouteIndex && (
               <React.Fragment key={`alt-${index}`}>
@@ -403,31 +616,14 @@ export function MapScreen() {
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
           </>
         )}
-
-        {/* Route pills are map markers, so the map keeps them pinned to their
-            coordinates itself - no JS projection, and so no lag behind a pan
-            and no drift when the camera is rotated or tilted. Rendered after
-            the polylines and the destination marker so they draw on top. */}
-        {routes.map((r, index) => {
-          const anchor = r.coordinates[anchorIndexes[index]];
-          if (!anchor) return null;
-
-          const duration = durationForRoute(r);
-          const distance = formatDistance(r.distanceMeters);
-
-          return (
-            <RoutePill
-              key={`pill-${index}`}
-              coordinate={anchor}
-              duration={duration}
-              distance={distance}
-              selected={index === selectedRouteIndex}
-              onPress={() => setSelectedRouteIndex(index)}
-              accessibilityLabel={`Route ${index + 1}: ${duration}, ${distance}`}
-            />
-          );
-        })}
       </MapView>
+
+      <RoutePillLayer
+        ref={pillLayerRef}
+        pills={pills}
+        selectedIndex={selectedRouteIndex}
+        onSelect={setSelectedRouteIndex}
+      />
 
       <View style={[styles.searchBar, { top: searchBarTop }]}>
         <View
@@ -550,6 +746,64 @@ export function MapScreen() {
             </Text>
           )}
 
+          {/* The accessibility-routed verdict outranks the screening line
+              below it: this route was planned around the barriers, rather
+              than merely inspected for them afterwards. */}
+          {selectedIsAccessible && (
+            <View style={styles.accessRow}>
+              <View style={[styles.accessDot, { backgroundColor: T.green }]} />
+              <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
+                {ACCESSIBLE_ROUTE_LABELS[mobilityAid]}
+              </Text>
+            </View>
+          )}
+
+          {routingAccessible && (
+            <Text style={[styles.routeAccess, { color: T.text2, fontSize: F.tinySm }]}>
+              Looking for an accessible route…
+            </Text>
+          )}
+
+          {noAccessibleRoute && (
+            <View style={styles.accessRow}>
+              <View
+                style={[styles.accessDot, { backgroundColor: HAZARD_COLORS['pathway-obstruction'] }]}
+              />
+              <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
+                No fully accessible route found to here
+              </Text>
+            </View>
+          )}
+
+          {/* Shown only when a mobility aid is set, and only when OSM actually
+              answered. A failed lookup says nothing at all - silence is the
+              honest result, whereas "no barriers found" read as a guarantee is
+              exactly the failure this feature exists to prevent. */}
+          {!selectedIsAccessible &&
+            needsAccessibilityCheck(mobilityAid) &&
+            (screening ? (
+              <Text style={[styles.routeAccess, { color: T.text2, fontSize: F.tinySm }]}>
+                Checking step-free access…
+              </Text>
+            ) : (
+              accessibility[selectedRouteIndex] && (
+                <View style={styles.accessRow}>
+                  <View
+                    style={[
+                      styles.accessDot,
+                      {
+                        backgroundColor:
+                          ACCESS_COLORS[accessibility[selectedRouteIndex]!.severity](T),
+                      },
+                    ]}
+                  />
+                  <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
+                    {accessibility[selectedRouteIndex]!.note}
+                  </Text>
+                </View>
+              )
+            ))}
+
           <Pressable
             style={[styles.startButton, { backgroundColor: T.green }]}
             onPress={() => navigation.navigate('ARNavigation', { route: selectedRoute })}
@@ -641,6 +895,9 @@ const styles = StyleSheet.create({
   routeSecondary: { marginTop: 2 },
   routeStats: { fontWeight: '600', marginTop: 10 },
   routeVia: { marginTop: 4 },
+  routeAccess: { marginTop: 6 },
+  accessRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  accessDot: { width: 8, height: 8, borderRadius: 4 },
   startButton: {
     marginTop: 14,
     borderRadius: RADIUS.button,

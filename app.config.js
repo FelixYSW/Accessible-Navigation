@@ -3,6 +3,12 @@
 // or a local .env when developing), rather than being committed to the repo.
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
+// OpenRouteService, used for accessibility-aware routing when a mobility aid
+// is set. Optional: without it the app still routes via Google and still
+// screens those routes against OpenStreetMap, it just can't offer a route
+// planned around barriers. Free key from openrouteservice.org/dev/#/signup.
+const ORS_API_KEY = process.env.ORS_API_KEY ?? '';
+
 module.exports = {
   expo: {
     name: 'Accessible-Navigation',
@@ -56,6 +62,7 @@ module.exports = {
     ],
     extra: {
       googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+      openRouteServiceApiKey: ORS_API_KEY,
     },
   },
 };

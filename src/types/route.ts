@@ -17,6 +17,10 @@ export interface WalkingRoute {
   // Full formatted address of the destination (from Place Details / Text
   // Search), shown as the secondary line under the destination name.
   destinationAddress?: string;
+  // Set when the route came from an accessibility-aware router (OpenRouteService
+  // over OpenStreetMap) rather than from Google, and was planned around the
+  // barriers that matter for this aid. Absent on ordinary Google routes.
+  accessibleFor?: 'cane' | 'walker' | 'wheelchair';
 }
 
 // A row in the search bar's suggestion dropdown - either a nearby place

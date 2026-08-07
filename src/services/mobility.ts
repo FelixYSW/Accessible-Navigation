@@ -35,7 +35,11 @@ export const MOBILITY_AID_LABELS: Record<MobilityAid, string> = {
   wheelchair: 'Wheelchair',
 };
 
-export const MOBILITY_AIDS: MobilityAid[] = ['none', 'cane', 'walker', 'wheelchair'];
+// Ordered fastest to slowest by the speeds above, so the control reads as a
+// scale rather than an arbitrary list - which is what lets the hare/tortoise
+// markers either side of it mean anything. Keep this ordering in step with
+// `MOBILITY_AID_SPEED_MPS` if a speed is ever retuned.
+export const MOBILITY_AIDS: MobilityAid[] = ['none', 'wheelchair', 'cane', 'walker'];
 
 // Rescales a Google walking duration to the user's own pace. `none` leaves it
 // exactly as Google returned it.
@@ -43,12 +47,32 @@ export function adjustDurationForAid(durationSeconds: number, aid: MobilityAid):
   return durationSeconds * (GOOGLE_WALKING_SPEED_MPS / MOBILITY_AID_SPEED_MPS[aid]);
 }
 
-// One-line explanation of the effect, shown under the control in Settings so
-// the setting visibly does something instead of looking decorative.
-export function describeAidPace(aid: MobilityAid): string {
-  if (aid === 'none') return 'Walking times use the standard walking pace';
-  const percent = Math.round((GOOGLE_WALKING_SPEED_MPS / MOBILITY_AID_SPEED_MPS[aid] - 1) * 100);
-  return `Walking times allow ${percent}% longer, at ${MOBILITY_AID_SPEED_MPS[aid].toFixed(
-    2,
-  )} m/s`;
+// The duration to show for a route, whichever router produced it.
+//
+// Only Google's durations need rescaling. OpenRouteService's wheelchair
+// profile applies its own pace model, so putting the multiplier on top of that
+// would charge the user for the same slowdown twice.
+export function routeDurationSeconds(
+  durationSeconds: number,
+  aid: MobilityAid,
+  alreadyPaced: boolean,
+): number {
+  return alreadyPaced ? durationSeconds : adjustDurationForAid(durationSeconds, aid);
 }
+
+// One short line under the control in Settings, so the setting visibly does
+// something instead of looking decorative. Covers both of its effects - the
+// slower timings and the kind of route planned - in plain words; the exact
+// speeds and limits live in the code above and in `accessibleRouting.ts`
+// rather than being recited at the user.
+// The pace words are comparative - "slower", "even slower", "slowest" - so
+// they read as one scale running left to right across the control, matching
+// the hare and tortoise either side of it. That makes them dependent on the
+// ordering in `MOBILITY_AIDS` and on the speeds above: reorder either and
+// these stop being true.
+export const MOBILITY_AID_DESCRIPTIONS: Record<MobilityAid, string> = {
+  none: 'Standard walking times',
+  wheelchair: 'Slower pace, step-free routes',
+  cane: 'Even slower pace, stairs need handrails',
+  walker: 'Slowest pace, step-free and gentle slopes',
+};
