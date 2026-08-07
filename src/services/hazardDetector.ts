@@ -37,8 +37,8 @@ function generateStubDetections(classes: HazardClass[]): HazardDetection[] {
 // `scheduleOnRN` (react-native-worklets) to push detections into state here.
 //
 // `classes` narrows what may be emitted to the hazard types the user still
-// has switched on in Settings ("Avoid hazard types"), so a type they have
-// turned off stops being flagged on camera as well as avoided when routing.
+// has switched on in Settings ("Hazard types"), so a type they have turned
+// off stops being flagged on camera as well as avoided when routing.
 export function useStubHazardDetector(
   active: boolean,
   classes: HazardClass[] = HAZARD_CLASSES,

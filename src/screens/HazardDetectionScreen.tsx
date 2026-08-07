@@ -6,9 +6,10 @@ import Svg, { Path } from 'react-native-svg';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { PulsingDot } from '../components/PulsingDot';
+import { VoiceGuidancePill } from '../components/VoiceGuidancePill';
 import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
-import { HAZARD_CLASSES, HAZARD_LABELS, type HazardClass } from '../types/hazard';
+import { HAZARD_CLASSES } from '../types/hazard';
 import { useStubHazardDetector } from '../services/hazardDetector';
 
 // Standalone hazard scanning: the same detection treatment as AR Navigation,
@@ -34,9 +35,12 @@ export function HazardDetectionScreen() {
 
       <HazardOverlay detections={detections} />
 
-      <View style={[styles.scanPill, { top: insets.top + 4 }]}>
-        <PulsingDot color={HAZARD_COLORS.pothole} />
-        <Text style={[styles.scanPillText, { fontSize: F.xs }]}>Scanning for hazards</Text>
+      <View style={[styles.topRow, { top: insets.top + 4 }]}>
+        <View style={styles.scanPill}>
+          <PulsingDot color={HAZARD_COLORS.pothole} />
+          <Text style={[styles.scanPillText, { fontSize: F.xs }]}>Scanning for hazards</Text>
+        </View>
+        <VoiceGuidancePill />
       </View>
 
       {/* No bottom safe-area padding here: this is a tab screen, and the tab
@@ -48,25 +52,8 @@ export function HazardDetectionScreen() {
         <Text style={[styles.sheetSubtitle, { fontSize: F.tinySm }]}>
           Hazards are flagged in real time, no route needed
         </Text>
-
-        {/* Legend, so the colour coding on the boxes above is readable
-            without opening Settings. */}
-        <View style={styles.legend}>
-          {HAZARD_CLASSES.map((hazardClass) => (
-            <LegendEntry key={hazardClass} hazardClass={hazardClass} fontSize={F.tiny} />
-          ))}
-        </View>
       </View>
     </CameraStage>
-  );
-}
-
-function LegendEntry({ hazardClass, fontSize }: { hazardClass: HazardClass; fontSize: number }) {
-  return (
-    <View style={styles.legendEntry}>
-      <View style={[styles.legendDot, { backgroundColor: HAZARD_COLORS[hazardClass] }]} />
-      <Text style={[styles.legendLabel, { fontSize }]}>{HAZARD_LABELS[hazardClass]}</Text>
-    </View>
   );
 }
 
@@ -114,9 +101,17 @@ function ScanReticle({ color }: { color: string }) {
 }
 
 const styles = StyleSheet.create({
-  scanPill: {
+  topRow: {
     position: 'absolute',
-    alignSelf: 'center',
+    left: SCREEN_MARGIN,
+    right: SCREEN_MARGIN,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  scanPill: {
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -138,8 +133,4 @@ const styles = StyleSheet.create({
   },
   sheetTitle: { color: '#fff', fontWeight: '700' },
   sheetSubtitle: { color: 'rgba(255,255,255,0.6)', marginTop: 2 },
-  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 12 },
-  legendEntry: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendLabel: { color: 'rgba(255,255,255,0.75)', fontWeight: '600' },
 });

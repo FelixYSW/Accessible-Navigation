@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -17,7 +17,6 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import type { LatLng, PlaceSuggestion, WalkingRoute } from '../types/route';
-import { HAZARD_CLASSES } from '../types/hazard';
 import {
   findPlace,
   getNearbyPlaces,
@@ -25,10 +24,9 @@ import {
   getPlaceDetails,
   getWalkingRoutes,
 } from '../services/directions';
-import { summariseRouteHazards } from '../services/routeHazards';
+import { adjustDurationForAid } from '../services/mobility';
 import { formatDistance, formatDuration } from '../utils/format';
-import { coordinateToScreenPoint, labelAnchorIndexForRoute } from '../utils/geo';
-import type { MapRegion } from '../utils/geo';
+import { labelAnchorIndexForRoute } from '../utils/geo';
 import { RoutePill } from '../components/RoutePill';
 import { useSettings } from '../theme/SettingsContext';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -37,20 +35,21 @@ import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 // autocomplete request, to avoid a network call on every keystroke.
 const AUTOCOMPLETE_DEBOUNCE_MS = 300;
 
-// Screen-edge margin (in px) kept clear when framing route previews, so the
-// polylines don't sit under the route panel at the bottom (the top margin is
-// computed per-device from the safe area, since the search bar sits directly
-// under it with no header above).
-const ROUTE_FIT_SIDE_PADDING = { right: 60, bottom: 220, left: 60 };
+// How far the user has to move before their location is re-read. Nearby
+// place suggestions are anchored to it, so it has to follow them around -
+// but a fix every few metres would re-query Places constantly for no gain.
+const LOCATION_UPDATE_DISTANCE_METERS = 25;
 
-// How far a route pill is pushed off its own route, perpendicular to the
-// route's local direction, so the pill sits beside the line and its tail can
-// point back at it.
-const PILL_OFFSET = 46;
+// Extra clearance (px) added around the framed routes so a pill anchored to a
+// vertex at the very edge of the route's bounds still lands fully on screen,
+// rather than half off it. Roughly half a pill each way, plus a margin.
+const PILL_CLEARANCE = { horizontal: 50, vertical: 34 };
 
-// Vertices either side of the anchor used to estimate the route's local
-// direction. A single neighbour is too noisy on dense polylines.
-const DIRECTION_SAMPLE_SPAN = 4;
+// Stand-ins used to frame the routes on the very first search, before the
+// search bar and route panel have reported their real measured heights.
+// Close enough that the corrected fit that follows is not a visible jump.
+const ESTIMATED_SEARCH_HEIGHT = 52;
+const ESTIMATED_PANEL_HEIGHT = 190;
 
 type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 
@@ -58,7 +57,7 @@ export function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<MapNavigation>();
-  const { T, F, darkMode, hazardActive } = useSettings();
+  const { T, F, darkMode, mobilityAid } = useSettings();
 
   // With no header above it, the search bar sits right under the safe area.
   const searchBarTop = insets.top + 8;
@@ -73,10 +72,12 @@ export function MapScreen() {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
-  // The map's current viewport and on-screen size, tracked so route pills can
-  // be projected into screen space and follow the map as it moves.
-  const [region, setRegion] = useState<MapRegion | null>(null);
-  const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
+  // Measured heights of the two floating panels, so routes can be framed in
+  // the strip of map that is actually visible between them. Both change with
+  // the Text Size setting, so they are measured rather than hard-coded. Held
+  // in a ref, not state: re-framing is driven by the route set changing, and
+  // a measurement must never re-render or re-frame on its own.
+  const chromeHeights = useRef({ search: 0, panel: 0 });
 
   // The vertex each route's pill is anchored to - recomputed only when the
   // route set changes, since the search is O(n*m) over route vertices.
@@ -91,16 +92,22 @@ export function MapScreen() {
     [routes],
   );
 
-  const activeHazardClasses = useMemo(
-    () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
-    [hazardActive],
-  );
+  // Every duration on this screen is rescaled from Google's able-bodied
+  // walking pace to the pace implied by the user's Mobility aid setting.
+  const durationForRoute = (walkingRoute: WalkingRoute) =>
+    formatDuration(adjustDurationForAid(walkingRoute.durationSeconds, mobilityAid));
 
   // In-app replacement for Alert.alert - keeps error/notice styling
   // consistent with the rest of the screen instead of the OS-native dialog.
   const showWarning = (title: string, message: string) => setWarning({ title, message });
 
+  // The user's location is watched, not read once: the suggestions shown when
+  // the search bar is focused but empty are the places near them *now*, so
+  // walking a few streets over has to change what is offered.
   useEffect(() => {
+    let subscription: Location.LocationSubscription | undefined;
+    let cancelled = false;
+
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -110,18 +117,45 @@ export function MapScreen() {
         );
         return;
       }
+
+      // One immediate fix so routing and suggestions work right away, then
+      // the watch takes over for everything after that.
       const position = await Location.getCurrentPositionAsync({});
+      if (cancelled) return;
       setOrigin({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+
+      subscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          distanceInterval: LOCATION_UPDATE_DISTANCE_METERS,
+        },
+        (update) => {
+          if (!cancelled) {
+            setOrigin({ latitude: update.coords.latitude, longitude: update.coords.longitude });
+          }
+        },
+      );
+      if (cancelled) subscription.remove();
     })();
+
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
   }, []);
 
   // MapView's `initialRegion` is only read once, at mount - and the very
   // first render happens before the location fetch above resolves, so it
   // always starts on the Kuala Lumpur fallback. Once `origin` actually
-  // arrives, explicitly move the camera there instead of relying on the
-  // (by-then-ignored) prop.
+  // arrives, explicitly move the camera there.
+  //
+  // Only for the *first* fix, though: `origin` now updates as the user walks,
+  // and re-centring on every update would yank the map back from wherever
+  // they had panned it to.
+  const hasCentredRef = useRef(false);
   useEffect(() => {
-    if (!origin || !mapRef.current) return;
+    if (!origin || hasCentredRef.current || !mapRef.current) return;
+    hasCentredRef.current = true;
     mapRef.current.animateToRegion({ ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 500);
   }, [origin]);
 
@@ -143,6 +177,7 @@ export function MapScreen() {
 
   // Keeps the suggestion list in sync with what's typed: nearby places when
   // the bar is focused and empty, debounced autocomplete matches otherwise.
+  // Both are anchored to `origin`, so they follow the user as they move.
   useEffect(() => {
     if (!suggestionsVisible || !origin) return;
 
@@ -174,17 +209,50 @@ export function MapScreen() {
     };
   }, [query, suggestionsVisible, origin]);
 
-  // Frames every previewed route on screen whenever a fresh set arrives (not
-  // on re-selection - the camera shouldn't jump just because the user picked
-  // a different alternative that's already in view).
+  // Frames a set of routes inside the strip of map left visible between the
+  // search bar and the route panel, widened by half a pill on each side - so
+  // no route line and no route pill can end up hidden behind either panel or
+  // cropped off an edge.
+  const fitRoutes = useCallback(
+    (list: WalkingRoute[]) => {
+      if (list.length === 0 || !mapRef.current) return;
+      const { search, panel } = chromeHeights.current;
+      mapRef.current.fitToCoordinates(
+        list.flatMap((r) => r.coordinates),
+        {
+          edgePadding: {
+            top: searchBarTop + (search || ESTIMATED_SEARCH_HEIGHT) + PILL_CLEARANCE.vertical,
+            bottom: SCREEN_MARGIN + (panel || ESTIMATED_PANEL_HEIGHT) + PILL_CLEARANCE.vertical,
+            left: SCREEN_MARGIN + PILL_CLEARANCE.horizontal,
+            right: SCREEN_MARGIN + PILL_CLEARANCE.horizontal,
+          },
+          animated: true,
+        },
+      );
+    },
+    [searchBarTop],
+  );
+
+  // Re-framed only when a fresh set of routes arrives - never on re-selection,
+  // since the camera shouldn't jump just because the user picked a different
+  // alternative that's already in view.
+  const fittedRoutes = useRef<WalkingRoute[]>([]);
   useEffect(() => {
-    if (routes.length === 0 || !mapRef.current) return;
-    const allCoordinates = routes.flatMap((r) => r.coordinates);
-    mapRef.current.fitToCoordinates(allCoordinates, {
-      edgePadding: { ...ROUTE_FIT_SIDE_PADDING, top: searchBarTop + 60 },
-      animated: true,
-    });
-  }, [routes, searchBarTop]);
+    fittedRoutes.current = routes;
+    fitRoutes(routes);
+  }, [routes, fitRoutes]);
+
+  // The first search runs against the estimated panel heights, because
+  // neither panel has been laid out yet. Once a real measurement replaces an
+  // estimate, that one search is re-framed with it; later measurements (a
+  // Text Size change, an alternative with a longer "Via" line) only update
+  // the number used by the next search.
+  const measureChrome = (key: 'search' | 'panel', height: number) => {
+    if (Math.abs(chromeHeights.current[key] - height) < 1) return;
+    const wasEstimated = chromeHeights.current[key] === 0;
+    chromeHeights.current[key] = height;
+    if (wasEstimated) fitRoutes(fittedRoutes.current);
+  };
 
   const previewRoutes = async (
     destination: LatLng,
@@ -262,32 +330,24 @@ export function MapScreen() {
   };
 
   const selectedRoute = routes[selectedRouteIndex];
-  const hazardSummary = summariseRouteHazards({}, T.green, activeHazardClasses);
 
   return (
     <View style={[styles.container, { backgroundColor: T.pageBg }]}>
       <MapView
-        // Android only reads `userInterfaceStyle` when it builds the map
-        // (it becomes a GoogleMapOptions.mapColorScheme at creation), so
-        // toggling Dark Mode has to recreate the view for the basemap to
-        // follow. Remounting loses the camera, hence the tracked `region`
-        // below as the restored starting point.
-        key={darkMode ? 'map-dark' : 'map-light'}
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         showsUserLocation
         // Keeps the Google basemap in step with the app's Dark Mode setting,
         // so the chrome floating over it isn't a dark card on a white map.
+        //
+        // The view is deliberately *not* remounted when this flips: on iOS the
+        // prop is applied live, and recreating the map to re-read it would
+        // throw away the camera and drop the user back at a default view every
+        // time they toggled Dark Mode.
         userInterfaceStyle={darkMode ? 'dark' : 'light'}
-        onLayout={(e) => setMapSize(e.nativeEvent.layout)}
-        onRegionChange={setRegion}
-        onRegionChangeComplete={setRegion}
         initialRegion={
-          // `region` is whatever the user last had on screen, so a Dark Mode
-          // remount comes back to the same place instead of jumping home.
-          region ??
-          (origin
+          origin
             ? { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }
             : {
                 // Kuala Lumpur, the study area from the FYP field observation.
@@ -295,7 +355,7 @@ export function MapScreen() {
                 longitude: 101.6869,
                 latitudeDelta: 0.05,
                 longitudeDelta: 0.05,
-              })
+              }
         }
       >
         {routes.map(
@@ -343,52 +403,36 @@ export function MapScreen() {
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
           </>
         )}
+
+        {/* Route pills are map markers, so the map keeps them pinned to their
+            coordinates itself - no JS projection, and so no lag behind a pan
+            and no drift when the camera is rotated or tilted. Rendered after
+            the polylines and the destination marker so they draw on top. */}
+        {routes.map((r, index) => {
+          const anchor = r.coordinates[anchorIndexes[index]];
+          if (!anchor) return null;
+
+          const duration = durationForRoute(r);
+          const distance = formatDistance(r.distanceMeters);
+
+          return (
+            <RoutePill
+              key={`pill-${index}`}
+              coordinate={anchor}
+              duration={duration}
+              distance={distance}
+              selected={index === selectedRouteIndex}
+              onPress={() => setSelectedRouteIndex(index)}
+              accessibilityLabel={`Route ${index + 1}: ${duration}, ${distance}`}
+            />
+          );
+        })}
       </MapView>
-
-      {/* Route pills are plain React Native views layered over the map,
-          positioned by projecting each route's anchor vertex into screen
-          space. They deliberately avoid <Marker> custom children, which
-          render by snapshotting the child view natively and came out blank
-          on this stack (New Architecture + Google provider on iOS). */}
-      {region && mapSize && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          {routes.map((r, index) => {
-            const placement = pillPlacement(routes, index, anchorIndexes, region, mapSize);
-            if (!placement) return null;
-
-            const { center, tailAngle } = placement;
-            // Skip pills the map has scrolled out of view.
-            if (
-              center.x < -PILL_OFFSET ||
-              center.y < -PILL_OFFSET ||
-              center.x > mapSize.width + PILL_OFFSET ||
-              center.y > mapSize.height + PILL_OFFSET
-            ) {
-              return null;
-            }
-
-            const duration = formatDuration(r.durationSeconds);
-            const distance = formatDistance(r.distanceMeters);
-
-            return (
-              <RoutePill
-                key={`pill-${index}`}
-                duration={duration}
-                distance={distance}
-                selected={index === selectedRouteIndex}
-                center={center}
-                tailAngle={tailAngle}
-                onPress={() => setSelectedRouteIndex(index)}
-                accessibilityLabel={`Route ${index + 1}: ${duration}, ${distance}`}
-              />
-            );
-          })}
-        </View>
-      )}
 
       <View style={[styles.searchBar, { top: searchBarTop }]}>
         <View
           style={[styles.searchSurface, { backgroundColor: T.cardRaised }, T.shadow]}
+          onLayout={(e) => measureChrome('search', e.nativeEvent.layout.height)}
         >
           <TextInput
             style={[styles.input, { color: T.text, fontSize: F.body }]}
@@ -483,30 +527,28 @@ export function MapScreen() {
             { backgroundColor: T.cardRaised, bottom: SCREEN_MARGIN + keyboardHeight },
             T.panelShadow,
           ]}
+          onLayout={(e) => measureChrome('panel', e.nativeEvent.layout.height)}
         >
           <Text style={[styles.routeName, { color: T.text, fontSize: F.h2 }]} numberOfLines={1}>
             {selectedRoute.destinationName}
           </Text>
-          {/* The design's secondary line is the route summary ("Via Jalan
-              Sultan Ismail"); the exact address takes priority here because
-              the app already promises to always show it, with the summary as
-              the fallback when Google returns no address. */}
-          {(selectedRoute.destinationAddress ?? selectedRoute.summary) && (
+          {selectedRoute.destinationAddress && (
             <Text style={[styles.routeSecondary, { color: T.text2, fontSize: F.xs }]} numberOfLines={1}>
-              {selectedRoute.destinationAddress ?? selectedRoute.summary}
+              {selectedRoute.destinationAddress}
             </Text>
           )}
           <Text style={[styles.routeStats, { color: T.accentDeep, fontSize: F.label }]}>
-            {formatDuration(selectedRoute.durationSeconds)} ·{' '}
-            {formatDistance(selectedRoute.distanceMeters)}
+            {durationForRoute(selectedRoute)} · {formatDistance(selectedRoute.distanceMeters)}
           </Text>
-
-          <View style={styles.hazardNoteRow}>
-            <View style={[styles.hazardDot, { backgroundColor: hazardSummary.color }]} />
-            <Text style={[styles.hazardNote, { color: T.text2, fontSize: F.tinySm }]}>
-              {hazardSummary.note}
+          {/* Which streets this particular route runs along - the one thing
+              that tells otherwise-similar alternatives apart, so it belongs on
+              the panel that describes the selected one. Google omits it on
+              very short routes. */}
+          {selectedRoute.summary && (
+            <Text style={[styles.routeVia, { color: T.text2, fontSize: F.tinySm }]} numberOfLines={2}>
+              Via {selectedRoute.summary}
             </Text>
-          </View>
+          )}
 
           <Pressable
             style={[styles.startButton, { backgroundColor: T.green }]}
@@ -538,81 +580,6 @@ export function MapScreen() {
       )}
     </View>
   );
-}
-
-// Works out where a route's pill sits and which way its tail points: the pill
-// is pushed off its anchor vertex perpendicular to the route's local
-// direction, and the tail then points straight back at that vertex.
-function pillPlacement(
-  routes: WalkingRoute[],
-  index: number,
-  anchorIndexes: number[],
-  region: MapRegion,
-  mapSize: { width: number; height: number },
-): { center: { x: number; y: number }; tailAngle: number } | null {
-  const coordinates = routes[index]?.coordinates;
-  const anchorIndex = anchorIndexes[index];
-  if (!coordinates || coordinates.length === 0 || anchorIndex === undefined) return null;
-
-  const project = (coordinate: LatLng) => coordinateToScreenPoint(coordinate, region, mapSize);
-  const anchor = project(coordinates[anchorIndex]);
-
-  const before = project(coordinates[Math.max(0, anchorIndex - DIRECTION_SAMPLE_SPAN)]);
-  const after = project(
-    coordinates[Math.min(coordinates.length - 1, anchorIndex + DIRECTION_SAMPLE_SPAN)],
-  );
-
-  let dx = after.x - before.x;
-  let dy = after.y - before.y;
-  const length = Math.hypot(dx, dy);
-  if (length === 0) {
-    // Degenerate stretch (all sampled vertices project to the same pixel) -
-    // fall back to pushing the pill straight up.
-    dx = 1;
-    dy = 0;
-  } else {
-    dx /= length;
-    dy /= length;
-  }
-
-  // Two candidate sides of the route; pick whichever lands further from the
-  // other routes, so alternatives' pills don't stack on top of each other.
-  const candidates = [
-    { x: anchor.x - dy * PILL_OFFSET, y: anchor.y + dx * PILL_OFFSET },
-    { x: anchor.x + dy * PILL_OFFSET, y: anchor.y - dx * PILL_OFFSET },
-  ];
-
-  const others = routes.filter((_, i) => i !== index);
-  const center =
-    others.length === 0
-      ? candidates[0]
-      : candidates.reduce((best, candidate) =>
-          clearance(candidate, others, project) > clearance(best, others, project)
-            ? candidate
-            : best,
-        );
-
-  const tailAngle = (Math.atan2(anchor.y - center.y, anchor.x - center.x) * 180) / Math.PI;
-  return { center, tailAngle };
-}
-
-// Smallest screen-space distance from `point` to any of the other routes,
-// sampled rather than measured against every vertex.
-function clearance(
-  point: { x: number; y: number },
-  others: WalkingRoute[],
-  project: (coordinate: LatLng) => { x: number; y: number },
-): number {
-  let nearest = Infinity;
-  for (const other of others) {
-    const step = Math.max(1, Math.floor(other.coordinates.length / 24));
-    for (let i = 0; i < other.coordinates.length; i += step) {
-      const projected = project(other.coordinates[i]);
-      const d = Math.hypot(projected.x - point.x, projected.y - point.y);
-      if (d < nearest) nearest = d;
-    }
-  }
-  return nearest;
 }
 
 const styles = StyleSheet.create({
@@ -668,13 +635,12 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 16,
     paddingHorizontal: 18,
+    zIndex: 4,
   },
   routeName: { fontWeight: '700' },
   routeSecondary: { marginTop: 2 },
   routeStats: { fontWeight: '600', marginTop: 10 },
-  hazardNoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
-  hazardDot: { width: 8, height: 8, borderRadius: 4 },
-  hazardNote: { flex: 1 },
+  routeVia: { marginTop: 4 },
   startButton: {
     marginTop: 14,
     borderRadius: RADIUS.button,

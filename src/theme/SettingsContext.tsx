@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { HazardClass } from '../types/hazard';
+import type { MobilityAid } from '../services/mobility';
 import {
   DARK_PALETTE,
   LIGHT_PALETTE,
@@ -10,7 +11,10 @@ import {
   type Palette,
 } from './tokens';
 
-export type MobilityAid = 'none' | 'cane' | 'walker' | 'wheelchair';
+// Re-exported so screens can keep importing the preference's type from the
+// context that owns it, while the pace model that gives it meaning lives with
+// the rest of the routing logic.
+export type { MobilityAid };
 
 export interface Preferences {
   fontScale: FontScaleKey;

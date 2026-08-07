@@ -10,47 +10,13 @@ function toDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
-export interface MapRegion {
-  latitude: number;
-  longitude: number;
-  latitudeDelta: number;
-  longitudeDelta: number;
-}
-
-// Web Mercator's vertical axis. Longitude maps linearly across the screen,
-// but latitude does not - projecting through Mercator is what keeps a
-// screen-space overlay pinned to the right spot on the map as it zooms.
-function mercatorY(latitude: number): number {
-  const clamped = Math.max(Math.min(latitude, 89.9), -89.9);
-  return Math.log(Math.tan(Math.PI / 4 + toRadians(clamped) / 2));
-}
-
-// Projects a geographic coordinate to an x/y pixel offset inside a map view
-// of `size` currently showing `region`, so plain React Native views can be
-// positioned on top of the map at real-world locations.
-export function coordinateToScreenPoint(
-  coordinate: LatLng,
-  region: MapRegion,
-  size: { width: number; height: number },
-): { x: number; y: number } {
-  const west = region.longitude - region.longitudeDelta / 2;
-  const x = ((coordinate.longitude - west) / region.longitudeDelta) * size.width;
-
-  const top = mercatorY(region.latitude + region.latitudeDelta / 2);
-  const bottom = mercatorY(region.latitude - region.latitudeDelta / 2);
-  const y = ((top - mercatorY(coordinate.latitude)) / (top - bottom)) * size.height;
-
-  return { x, y };
-}
-
 // Picks the point along a route best suited to carrying its label: the
 // vertex furthest from every other route, so overlapping alternatives get
 // labels on the stretches where they actually diverge (mirroring how
 // Google Maps places its route badges) rather than stacked on shared roads.
 //
-// Returns the *index* of that vertex, so callers can also look at its
-// neighbours - the redesigned route pill needs the local direction of the
-// route there to work out which way its tail should point.
+// Returns the *index* of that vertex rather than the coordinate itself, so
+// callers can look at its neighbours too.
 export function labelAnchorIndexForRoute(routes: LatLng[][], index: number): number {
   const own = routes[index];
   const others = routes.filter((_, i) => i !== index);

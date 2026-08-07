@@ -1,117 +1,120 @@
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Leaf } from 'lucide-react-native';
-import Svg, { Polygon } from 'react-native-svg';
-import { useTheme } from '../theme/SettingsContext';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { Marker } from 'react-native-maps';
+import type { LatLng } from '../types/route';
+import { useSettings } from '../theme/SettingsContext';
+import { FONT_SCALES } from '../theme/tokens';
 
-// Distance from the pill's centre to the centre of its tail triangle, and the
-// triangle's own footprint. Matches the design's 34px wrapper offset plus half
-// the 8px triangle.
-const TAIL_DISTANCE = 38;
-const TAIL_WIDTH = 8;
-const TAIL_HEIGHT = 14;
+// react-native-maps draws a custom marker child by snapshotting the React
+// Native view into a native marker image. It has to be told to keep
+// re-snapshotting while the view is still settling, or it captures an empty
+// frame and the marker shows up blank - but leaving it on permanently
+// re-snapshots continuously, which is exactly the cost the native marker is
+// here to avoid. So it snapshots for a moment after anything visible changes,
+// then stops.
+const SNAPSHOT_WINDOW_MS = 600;
 
-// The pill and its tail are laid out inside a fixed-size transparent box
-// centred on the anchor point, rather than letting the tail overflow the
-// pill's own bounds - Android clips views that spill outside their parent,
-// which would drop the tail entirely. Sized to still fit the widest pill the
-// Extra Large text setting can produce ("1 hr 25 min"); the box is
-// `box-none`, so the empty space around the pill stays transparent to touch
-// and the map underneath still pans normally.
-const FRAME = 170;
+// The pill is given explicit dimensions rather than being sized by its text:
+// a view sized purely by intrinsic content can measure 0x0 at snapshot time
+// on iOS, which is the other way this renders blank. Scaled by the Text Size
+// setting so the label doesn't outgrow its box at Extra Large.
+const BASE_PILL_SIZE = { width: 96, height: 46 };
 
 interface RoutePillProps {
+  /** The point on the route the pill is centred on. */
+  coordinate: LatLng;
   duration: string;
   distance: string;
   selected: boolean;
-  /** Screen position the pill is centred on. */
-  center: { x: number; y: number };
-  /** Direction, in degrees, from the pill toward the point on its own route
-   *  curve that the tail should point at. 0 = right, 90 = down. */
-  tailAngle: number;
   onPress: () => void;
   accessibilityLabel: string;
 }
 
+// A route's time/distance badge, rendered as a real map marker so the map
+// itself keeps it glued to its coordinate. The previous version was a plain
+// view layered over the map and positioned in JS from `onRegionChange`, which
+// meant it always trailed the map by a frame or two while panning and drifted
+// off its line entirely once the camera was rotated or tilted - the
+// projection had no way to know about either.
 export function RoutePill({
+  coordinate,
   duration,
   distance,
   selected,
-  center,
-  tailAngle,
   onPress,
   accessibilityLabel,
 }: RoutePillProps) {
-  const { T, F } = useTheme();
+  const { T, F, fontScale, darkMode } = useSettings();
+
+  const scale = FONT_SCALES[fontScale];
+  const size = {
+    width: Math.round(BASE_PILL_SIZE.width * scale),
+    height: Math.round(BASE_PILL_SIZE.height * scale),
+  };
 
   const background = selected ? T.pillSelected : T.card;
   const foreground = selected ? '#fff' : T.text;
 
-  const radians = (tailAngle * Math.PI) / 180;
-  const tailLeft = FRAME / 2 + TAIL_DISTANCE * Math.cos(radians) - TAIL_WIDTH / 2;
-  const tailTop = FRAME / 2 + TAIL_DISTANCE * Math.sin(radians) - TAIL_HEIGHT / 2;
+  const tracksViewChanges = useSnapshotWindow(
+    `${duration}|${distance}|${selected}|${darkMode}|${fontScale}`,
+  );
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={[styles.frame, { left: center.x - FRAME / 2, top: center.y - FRAME / 2 }]}
+    <Marker
+      coordinate={coordinate}
+      // Centre the pill on the point, matching how it was positioned before.
+      anchor={{ x: 0.5, y: 0.5 }}
+      tracksViewChanges={tracksViewChanges}
+      onPress={onPress}
+      // The chosen route's pill wins any overlap with an alternative's.
+      zIndex={selected ? 2 : 1}
+      accessibilityLabel={accessibilityLabel}
     >
-      {/* Drawn before the pill so the pill's shadow layers over the seam
-          between the two, hiding the triangle's flat base. */}
-      <View
-        pointerEvents="none"
-        style={[
-          styles.tail,
-          { left: tailLeft, top: tailTop, transform: [{ rotate: `${tailAngle}deg` }] },
-        ]}
-      >
-        <Svg width={TAIL_WIDTH} height={TAIL_HEIGHT}>
-          <Polygon
-            points={`0,0 ${TAIL_WIDTH},${TAIL_HEIGHT / 2} 0,${TAIL_HEIGHT}`}
-            fill={background}
-          />
-        </Svg>
+      <View style={[styles.pill, size, { backgroundColor: background }]}>
+        <Text
+          style={[styles.duration, { color: foreground, fontSize: F.xs }]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
+          {duration}
+        </Text>
+        <Text
+          style={[styles.distance, { color: foreground, fontSize: F.micro }]}
+          numberOfLines={1}
+        >
+          {distance}
+        </Text>
       </View>
-
-      <Pressable
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-        accessibilityLabel={accessibilityLabel}
-        style={[styles.pill, { backgroundColor: background }]}
-      >
-        <View style={styles.durationRow}>
-          {selected && <Leaf size={Math.round(F.sm)} color={foreground} strokeWidth={2.4} />}
-          <Text style={[styles.duration, { color: foreground, fontSize: F.sm }]}>{duration}</Text>
-        </View>
-        <Text style={[styles.distance, { color: foreground, fontSize: F.micro }]}>{distance}</Text>
-      </Pressable>
-    </View>
+    </Marker>
   );
 }
 
+// True for a short window after `signature` changes, so the marker re-snapshots
+// while the new content lays out and then settles into a static image.
+function useSnapshotWindow(signature: string): boolean {
+  const [tracking, setTracking] = useState(true);
+
+  useEffect(() => {
+    setTracking(true);
+    const timeout = setTimeout(() => setTracking(false), SNAPSHOT_WINDOW_MS);
+    return () => clearTimeout(timeout);
+  }, [signature]);
+
+  return tracking;
+}
+
 const styles = StyleSheet.create({
-  frame: {
-    position: 'absolute',
-    width: FRAME,
-    height: FRAME,
+  pill: {
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  tail: { position: 'absolute' },
-  pill: {
-    borderRadius: 14,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    minWidth: 74,
-    alignItems: 'center',
+    paddingHorizontal: 6,
     shadowColor: '#000',
-    shadowOpacity: 0.28,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 6,
   },
-  durationRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   duration: { fontWeight: '700' },
-  distance: { fontWeight: '600', opacity: 0.85 },
+  distance: { fontWeight: '600', marginTop: 1, opacity: 0.85 },
 });

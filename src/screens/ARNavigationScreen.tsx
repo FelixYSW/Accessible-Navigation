@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { X } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
 import * as Location from 'expo-location';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -12,8 +11,9 @@ import { bearingBetween, distanceMeters, nextRoutePoint, relativeBearing } from 
 import { useStubHazardDetector } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
-import { AudioCueBars } from '../components/AudioCueBars';
+import { VoiceGuidancePill } from '../components/VoiceGuidancePill';
 import { useSettings } from '../theme/SettingsContext';
+import { adjustDurationForAid } from '../services/mobility';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { formatDistance, formatDuration } from '../utils/format';
 
@@ -26,7 +26,7 @@ const TURN_THRESHOLD_DEGREES = 25;
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
   const insets = useSafeAreaInsets();
-  const { T, F, voiceGuidance, hazardActive } = useSettings();
+  const { T, F, hazardActive, mobilityAid } = useSettings();
   const [position, setPosition] = useState<LatLng | null>(null);
   const [heading, setHeading] = useState(0);
 
@@ -64,7 +64,10 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   const progress = useTripProgress(walkingRoute, position);
   const remainingMeters = walkingRoute.distanceMeters * (1 - progress);
-  const remainingSeconds = walkingRoute.durationSeconds * (1 - progress);
+  // Rescaled to the pace implied by the Mobility aid setting, so the time
+  // left here matches the estimate the user chose this route on.
+  const remainingSeconds =
+    adjustDurationForAid(walkingRoute.durationSeconds, mobilityAid) * (1 - progress);
 
   const exit = () => navigation.goBack();
 
@@ -72,24 +75,10 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     <CameraStage isActive>
       <HazardOverlay detections={detections} />
 
+      {/* The route is left via "End" on the sheet below - a second, smaller
+          exit control at the top was a redundant way to lose the route. */}
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
-        <Pressable
-          onPress={exit}
-          style={styles.exitButton}
-          accessibilityRole="button"
-          accessibilityLabel="Exit AR navigation"
-        >
-          <X size={18} color="#fff" strokeWidth={2.4} />
-        </Pressable>
-
-        {/* Only shown when Voice Guidance is on in Settings - the indicator
-            would otherwise claim audio cues the app is not speaking. */}
-        {voiceGuidance && (
-          <View style={styles.audioPill}>
-            <AudioCueBars color={T.green} />
-            <Text style={[styles.audioPillText, { fontSize: F.micro }]}>Audio cue</Text>
-          </View>
-        )}
+        <VoiceGuidancePill />
       </View>
 
       <View style={[styles.turnCard, { top: insets.top + 60 }]}>
@@ -204,26 +193,8 @@ const styles = StyleSheet.create({
     right: SCREEN_MARGIN,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
   },
-  exitButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  audioPill: {
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 19,
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-  },
-  audioPillText: { color: '#fff', fontWeight: '600' },
   turnCard: {
     position: 'absolute',
     alignSelf: 'center',
