@@ -2,7 +2,6 @@ import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
-import Svg, { Path } from 'react-native-svg';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { PulsingDot } from '../components/PulsingDot';
@@ -17,7 +16,7 @@ import { useStubHazardDetector } from '../services/hazardDetector';
 export function HazardDetectionScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const { T, F, scaled, hazardActive } = useSettings();
+  const { F, scaled, hazardActive } = useSettings();
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -31,8 +30,6 @@ export function HazardDetectionScreen() {
 
   return (
     <CameraStage isActive={isFocused}>
-      <ScanReticle color={T.green} />
-
       <HazardOverlay detections={detections} />
 
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
@@ -57,49 +54,6 @@ export function HazardDetectionScreen() {
         </Text>
       </View>
     </CameraStage>
-  );
-}
-
-// Four L-shaped brackets forming a viewfinder frame, drawn in the app's green
-// at low opacity so they frame the path without competing with detections.
-function ScanReticle({ color }: { color: string }) {
-  return (
-    <Svg
-      style={StyleSheet.absoluteFill}
-      viewBox="0 0 402 700"
-      preserveAspectRatio="none"
-      opacity={0.55}
-      pointerEvents="none"
-    >
-      <Path
-        d="M60 220 v-30 a6 6 0 0 1 6-6 h30"
-        stroke={color}
-        strokeWidth={3}
-        strokeLinecap="round"
-        fill="none"
-      />
-      <Path
-        d="M342 220 v-30 a6 6 0 0 0-6-6 h-30"
-        stroke={color}
-        strokeWidth={3}
-        strokeLinecap="round"
-        fill="none"
-      />
-      <Path
-        d="M60 480 v30 a6 6 0 0 0 6 6 h30"
-        stroke={color}
-        strokeWidth={3}
-        strokeLinecap="round"
-        fill="none"
-      />
-      <Path
-        d="M342 480 v30 a6 6 0 0 1-6 6 h-30"
-        stroke={color}
-        strokeWidth={3}
-        strokeLinecap="round"
-        fill="none"
-      />
-    </Svg>
   );
 }
 

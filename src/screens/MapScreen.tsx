@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import { LocateFixed } from 'lucide-react-native';
+import { Crosshair } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -57,6 +57,10 @@ const LOCATION_UPDATE_DISTANCE_METERS = 25;
 // vertex at the very edge of the route's bounds still lands fully on screen,
 // rather than half off it. Roughly half a pill each way, plus a margin.
 const PILL_CLEARANCE = { horizontal: 50, vertical: 34 };
+
+// The zoom the map opens on, and the one the recentre button returns to: about
+// a 1km span, which is the scale a walking route is read at.
+const DEFAULT_SPAN = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
 
 // Stand-ins used to frame the routes on the very first search, before the
 // search bar and route panel have reported their real measured heights.
@@ -141,8 +145,10 @@ export function MapScreen() {
     [routes, accessibleRoute],
   );
 
-  // Routes are on screen and the user's job is to pick one. The map is frozen
-  // in this state - see the gesture props on MapView.
+  // Routes are on screen and the user's job is to pick one. The map is still
+  // free to pan and zoom here - a walker checking which side of a junction a
+  // route takes needs to be able to look - but the camera has a home to go
+  // back to, which is the framing that fits every route and pill on screen.
   const previewing = displayRoutes.length > 0;
 
   // The vertex each route's pill is anchored to - recomputed only when the
@@ -244,29 +250,35 @@ export function MapScreen() {
   // After that first fix the map keeps following the user as they walk, which
   // is the default a walking app should have: the thing you need to see is
   // where you are. Following stops the moment the user drags the map away
-  // themselves (see `onRegionChange` below), and the recentre button brings it
-  // back - flipping `following` back to true re-runs this effect, which is
-  // what actually moves the camera.
+  // themselves (see `onRegionChange` below), and the recentre button turns it
+  // back on.
   //
   // Suspended while routes are previewed: the camera is framed on the whole
   // route set then, and a location update arriving mid-preview must not pull
   // it back onto the user and crop the routes out of view.
+  //
+  // `following` is read through a ref rather than listed as a dependency, so
+  // that turning it back on doesn't re-run this effect: the recentre button
+  // does its own, zoom-resetting move, and a second animation racing it would
+  // undo the zoom half of it.
   const hasCentredRef = useRef(false);
+  const followingRef = useRef(following);
+  followingRef.current = following;
   useEffect(() => {
     if (!origin || !mapRef.current) return;
 
     if (!hasCentredRef.current) {
       hasCentredRef.current = true;
-      mapRef.current.animateToRegion({ ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 500);
+      mapRef.current.animateToRegion({ ...origin, ...DEFAULT_SPAN }, 500);
       return;
     }
 
-    if (!following || previewing) return;
+    if (!followingRef.current || previewing) return;
     // `animateCamera` rather than `animateToRegion`: it moves the centre and
-    // leaves the zoom alone, so following the user doesn't keep resetting a
-    // zoom level they chose.
+    // leaves the zoom alone, so walking along doesn't keep pulling the map
+    // back to a zoom level the user has since changed.
     mapRef.current.animateCamera({ center: origin }, { duration: 500 });
-  }, [origin, following, previewing]);
+  }, [origin, previewing]);
 
   // Keeps the route panel (and suggestions box) above the on-screen keyboard -
   // both are absolutely positioned, so without this they end up rendered
@@ -562,6 +574,22 @@ export function MapScreen() {
     setSuggestionsVisible(false);
   };
 
+  // One button, two homes. While routes are being previewed, "back" means the
+  // framing that fits every route and every pill on screen - the view the
+  // preview opened on - not the user's location, which may be at the very edge
+  // of it. With no routes up, it means the user, at the zoom the map opens on:
+  // someone who has zoomed out to look around and then asked to be taken back
+  // wants the walking-scale view they started from, not their own dot lost in
+  // the middle of the same city-wide one.
+  const recentre = () => {
+    setFollowing(true);
+    if (previewing) {
+      fitRoutes(displayRoutes);
+    } else if (origin) {
+      mapRef.current?.animateToRegion({ ...origin, ...DEFAULT_SPAN }, 500);
+    }
+  };
+
   // The verdict dots on the route panel read as punctuation for the line of
   // text beside them, so they grow with it.
   const accessDotSize = {
@@ -599,14 +627,6 @@ export function MapScreen() {
         // them anyway.
         rotateEnabled={false}
         pitchEnabled={false}
-        // While routes are previewed the map is locked: the only decision left
-        // on this screen is which of the routes to take, and panning or
-        // zooming away from them only loses the answer. The camera is already
-        // framed on every route, and tapping a route line or its pill still
-        // selects it - those are annotation presses, not map gestures, so
-        // freezing the camera doesn't disable choosing.
-        scrollEnabled={!previewing}
-        zoomEnabled={!previewing}
         // Fed straight to the pill layer instead of into state here, so a pan
         // re-renders three pills rather than this whole screen.
         //
@@ -626,7 +646,7 @@ export function MapScreen() {
         }}
         initialRegion={
           origin
-            ? { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }
+            ? { ...origin, ...DEFAULT_SPAN }
             : {
                 // Kuala Lumpur, the study area from the FYP field observation.
                 latitude: 3.139,
@@ -690,11 +710,11 @@ export function MapScreen() {
         onSelect={setSelectedRouteIndex}
       />
 
-      {/* Only offered once the map has actually stopped following the user -
-          a recentre button on an already-centred map is a control that does
-          nothing. Never during a preview, where the map is frozen on the
-          routes and can't have been dragged off the user in the first place. */}
-      {origin && !following && !previewing && !suggestionsVisible && (
+      {/* Offered only once the map has actually been moved off its home - on
+          an already-centred map it would be a control that does nothing. What
+          "home" means depends on what is on screen: the routes while one is
+          being previewed, the user's own location otherwise. */}
+      {(previewing || origin) && !following && !suggestionsVisible && (
         <Pressable
           style={[
             styles.recenterButton,
@@ -703,15 +723,18 @@ export function MapScreen() {
               height: scaled(48),
               width: scaled(48),
               borderRadius: scaled(48) / 2,
+              // Clears the route panel, which is only on screen while routes
+              // are being previewed.
+              bottom: SCREEN_MARGIN + (previewing ? chromeHeights.current.panel + 10 : 0),
             },
             T.shadow,
           ]}
-          onPress={() => setFollowing(true)}
+          onPress={recentre}
           accessibilityRole="button"
-          accessibilityLabel="Recentre on my location"
+          accessibilityLabel={previewing ? 'Show the whole route' : 'Recentre on my location'}
           hitSlop={8}
         >
-          <LocateFixed size={scaled(22)} color={T.accent} strokeWidth={2} />
+          <Crosshair size={scaled(22)} color={T.accent} strokeWidth={2} />
         </Pressable>
       )}
 
@@ -979,11 +1002,11 @@ const styles = StyleSheet.create({
   // Below the search bar's zIndex (5) and above the map, so it swallows taps
   // meant for the map without covering the field it is dismissing.
   dismissLayer: { zIndex: 3 },
-  // Size and radius are set inline, from the Text Size multiplier.
+  // Size, radius and bottom offset are set inline: the first two from the Text
+  // Size multiplier, the last from whether the route panel is in the way.
   recenterButton: {
     position: 'absolute',
     right: SCREEN_MARGIN,
-    bottom: SCREEN_MARGIN,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 4,

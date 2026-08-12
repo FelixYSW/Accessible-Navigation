@@ -1,7 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
-import { VolumeX } from 'lucide-react-native';
-import { AudioCueBars } from './AudioCueBars';
+import { Volume2, VolumeX } from 'lucide-react-native';
 import { useSettings } from '../theme/SettingsContext';
 
 /** Which half of voice guidance a pill switches: the spoken turn-by-turn
@@ -40,7 +39,7 @@ export function VoiceCuePill({ cue }: { cue: VoiceCue }) {
       hitSlop={6}
     >
       {on ? (
-        <AudioCueBars color={T.green} height={scaled(14)} />
+        <Volume2 size={scaled(15)} color={T.green} strokeWidth={2.2} />
       ) : (
         <VolumeX size={scaled(15)} color="rgba(255,255,255,0.75)" strokeWidth={2.2} />
       )}

@@ -20,6 +20,9 @@ interface RoutePillProps {
   /** Screen position the pill is centred on. */
   center: { x: number; y: number };
   onPress: () => void;
+  /** Reports the pill's rendered size, which the layer needs to keep pills
+   *  from overlapping each other. */
+  onMeasure: (size: { width: number; height: number }) => void;
   accessibilityLabel: string;
 }
 
@@ -29,6 +32,7 @@ export function RoutePill({
   selected,
   center,
   onPress,
+  onMeasure,
   accessibilityLabel,
 }: RoutePillProps) {
   const { T, F } = useTheme();
@@ -54,6 +58,7 @@ export function RoutePill({
         accessibilityRole="button"
         accessibilityState={{ selected }}
         accessibilityLabel={accessibilityLabel}
+        onLayout={(e) => onMeasure(e.nativeEvent.layout)}
         style={[styles.pill, { backgroundColor: background }]}
       >
         <Text style={[styles.duration, { color: foreground, fontSize: F.xs }]}>{duration}</Text>

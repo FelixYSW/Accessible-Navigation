@@ -36,6 +36,9 @@ const SEGMENT_INNER_PADDING = 12;
 // to be unreadable is no better than a truncated one.
 const MIN_FONT_SIZE = 11;
 
+// The control's own height at the default Text Size, scaled from there.
+const SEGMENT_HEIGHT = 32;
+
 interface SegmentedFieldProps {
   values: string[];
   selectedIndex: number;
@@ -58,7 +61,7 @@ export function SegmentedField({
   onChange,
   accessibilityLabel,
 }: SegmentedFieldProps) {
-  const { F, darkMode } = useSettings();
+  const { F, scaled, darkMode } = useSettings();
   const [width, setWidth] = useState(0);
 
   const fontSize = fittedFontSize(values, width, F.sm);
@@ -69,6 +72,12 @@ export function SegmentedField({
         values={values}
         selectedIndex={selectedIndex}
         onChange={(event) => onChange(event.nativeEvent.selectedSegmentIndex)}
+        // Both implementations behind this component - the real
+        // UISegmentedControl on iOS and the library's JS rebuild of it on
+        // Android - hard-code a 32pt height, which crops a scaled-up label
+        // instead of growing to hold it. Their own style comes first in the
+        // array, so this overrides it on both.
+        style={{ height: scaled(SEGMENT_HEIGHT) }}
         // Dark Mode is an in-app preference that can disagree with the OS
         // theme, so the native control is told which appearance to use instead
         // of being left to follow the system.
