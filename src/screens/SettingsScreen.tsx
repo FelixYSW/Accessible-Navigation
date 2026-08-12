@@ -13,6 +13,11 @@ import {
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN, type FontScaleKey } from '../theme/tokens';
 import { HAZARD_CLASSES, HAZARD_SETTING_LABELS } from '../types/hazard';
 
+// The dotted run between the hare and the tortoise. Spread across whatever
+// width is left between them, so it stretches with the card rather than
+// needing a count per screen size.
+const PACE_DOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
 const TEXT_SIZES: { key: FontScaleKey; label: string }[] = [
   { key: 'default', label: 'Default' },
   { key: 'large', label: 'Large' },
@@ -24,14 +29,17 @@ export function SettingsScreen() {
   const {
     T,
     F,
+    scaled,
     fontScale,
     darkMode,
-    voiceGuidance,
+    spokenTurns,
+    hazardCues,
     mobilityAid,
     hazardActive,
     setFontScale,
     setDarkMode,
-    setVoiceGuidance,
+    setSpokenTurns,
+    setHazardCues,
     setMobilityAid,
     toggleHazard,
   } = useSettings();
@@ -75,21 +83,41 @@ export function SettingsScreen() {
         </View>
       </View>
 
-      <SectionLabel>Navigation</SectionLabel>
+      {/* Two switches rather than one: a user who knows the way but not the
+          pavement wants hazard warnings without turn-by-turn chatter, and a
+          user on an unfamiliar route in a quiet place wants the reverse. */}
+      <SectionLabel>Voice guidance</SectionLabel>
       <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
-        <View style={[styles.row, styles.rowInline]}>
+        <View style={[styles.row, styles.rowInline, styles.rowDivided, { borderBottomColor: T.sep }]}>
           <View style={styles.rowTextBlock}>
             <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
-              Voice Guidance
+              Spoken Turns
             </Text>
             <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
-              Spoken turn and hazard cues
+              Turn-by-turn directions read aloud
             </Text>
           </View>
           <Switch
-            value={voiceGuidance}
-            onValueChange={setVoiceGuidance}
-            accessibilityLabel="Voice Guidance"
+            value={spokenTurns}
+            onValueChange={setSpokenTurns}
+            accessibilityLabel="Spoken Turns"
+            {...switchColors}
+          />
+        </View>
+
+        <View style={[styles.row, styles.rowInline]}>
+          <View style={styles.rowTextBlock}>
+            <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
+              Hazard Cues
+            </Text>
+            <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
+              Spoken warning when a hazard is detected
+            </Text>
+          </View>
+          <Switch
+            value={hazardCues}
+            onValueChange={setHazardCues}
+            accessibilityLabel="Hazard Cues"
             {...switchColors}
           />
         </View>
@@ -99,16 +127,34 @@ export function SettingsScreen() {
       <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
         <View style={styles.row}>
           {/* The segments run fastest to slowest, so the two ends are marked
-              with a hare and a tortoise. Announced as one label rather than
-              two loose icons, since a screen reader reading "rabbit, turtle"
-              on its own says nothing about what the control does. */}
+              with a hare and a tortoise, joined by a dotted run so the two read
+              as the ends of one scale rather than as two unrelated icons.
+              Announced as one label rather than three loose pieces, since a
+              screen reader reading "rabbit, turtle" on its own says nothing
+              about what the control does. */}
           <View
             style={styles.paceScale}
             accessible
             accessibilityLabel="Ordered from fastest to slowest"
           >
-            <Rabbit size={18} color={T.text2} strokeWidth={2} />
-            <Turtle size={18} color={T.text2} strokeWidth={2} />
+            <Rabbit size={scaled(18)} color={T.text2} strokeWidth={2} />
+            <View style={styles.paceDots}>
+              {PACE_DOTS.map((dot) => (
+                <View
+                  key={dot}
+                  style={[
+                    styles.paceDot,
+                    {
+                      backgroundColor: T.text2,
+                      height: scaled(3),
+                      width: scaled(3),
+                      borderRadius: scaled(3) / 2,
+                    },
+                  ]}
+                />
+              ))}
+            </View>
+            <Turtle size={scaled(18)} color={T.text2} strokeWidth={2} />
           </View>
           <SegmentedField
             values={MOBILITY_AIDS.map((aid) => MOBILITY_AID_LABELS[aid])}
@@ -135,11 +181,21 @@ export function SettingsScreen() {
           return (
             <View key={hazardClass} style={[styles.hazardRow, { backgroundColor: T.card }]}>
               <View style={styles.hazardRowLeft}>
-                <View style={styles.swatch}>
+                <View
+                  style={[
+                    styles.swatch,
+                    { height: scaled(32), width: scaled(32), borderRadius: scaled(9) },
+                  ]}
+                >
                   {/* A separate tinted layer rather than an alpha colour, so
                       the icon on top stays fully opaque. */}
-                  <View style={[styles.swatchTint, { backgroundColor: color }]} />
-                  <Icon size={18} color={color} strokeWidth={2} />
+                  <View
+                    style={[
+                      styles.swatchTint,
+                      { backgroundColor: color, borderRadius: scaled(9) },
+                    ]}
+                  />
+                  <Icon size={scaled(18)} color={color} strokeWidth={2} />
                 </View>
                 <Text style={[styles.hazardLabel, { color: T.text, fontSize: F.label }]}>
                   {label}
@@ -188,12 +244,23 @@ const styles = StyleSheet.create({
   rowSubtitle: { marginTop: 2 },
   paceScale: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     // Inset so each icon sits over the middle of its end segment rather than
     // hard against the control's rounded corner.
     paddingHorizontal: 10,
     paddingBottom: 8,
   },
+  paceDots: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    // Keeps the run clear of both icons instead of running into them.
+    paddingHorizontal: 10,
+  },
+  // Size and radius are set inline, from the Text Size multiplier.
+  paceDot: { opacity: 0.45 },
   hazardList: { gap: 8, paddingHorizontal: SCREEN_MARGIN, paddingBottom: 20 },
   hazardRow: {
     borderRadius: RADIUS.control,
@@ -205,13 +272,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   hazardRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  swatch: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  swatchTint: { ...StyleSheet.absoluteFill, borderRadius: 9, opacity: 0.16 },
+  // Size and radius are set inline, from the Text Size multiplier.
+  swatch: { alignItems: 'center', justifyContent: 'center' },
+  swatchTint: { ...StyleSheet.absoluteFill, opacity: 0.16 },
   hazardLabel: { fontWeight: '600', flex: 1 },
 });

@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import { LocateFixed } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -93,9 +94,10 @@ type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 export function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const pillLayerRef = useRef<RoutePillLayerHandle>(null);
+  const inputRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<MapNavigation>();
-  const { T, F, darkMode, mobilityAid } = useSettings();
+  const { T, F, scaled, darkMode, mobilityAid } = useSettings();
 
   // With no header above it, the search bar sits right under the safe area.
   const searchBarTop = insets.top + 8;
@@ -109,6 +111,9 @@ export function MapScreen() {
   const [suggestionsVisible, setSuggestionsVisible] = useState(false);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  // Whether the camera is still tracking the user. True until they drag the
+  // map somewhere else, and back to true when they tap Recentre.
+  const [following, setFollowing] = useState(true);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
   // OSM accessibility screening, one entry per route (null where the lookup
   // failed - "unknown", which must never be presented as "clear").
@@ -135,6 +140,10 @@ export function MapScreen() {
     () => (accessibleRoute ? [...routes, accessibleRoute] : routes),
     [routes, accessibleRoute],
   );
+
+  // Routes are on screen and the user's job is to pick one. The map is frozen
+  // in this state - see the gesture props on MapView.
+  const previewing = displayRoutes.length > 0;
 
   // The vertex each route's pill is anchored to - recomputed only when the
   // route set changes, since the search is O(n*m) over route vertices.
@@ -232,15 +241,32 @@ export function MapScreen() {
   // always starts on the Kuala Lumpur fallback. Once `origin` actually
   // arrives, explicitly move the camera there.
   //
-  // Only for the *first* fix, though: `origin` now updates as the user walks,
-  // and re-centring on every update would yank the map back from wherever
-  // they had panned it to.
+  // After that first fix the map keeps following the user as they walk, which
+  // is the default a walking app should have: the thing you need to see is
+  // where you are. Following stops the moment the user drags the map away
+  // themselves (see `onRegionChange` below), and the recentre button brings it
+  // back - flipping `following` back to true re-runs this effect, which is
+  // what actually moves the camera.
+  //
+  // Suspended while routes are previewed: the camera is framed on the whole
+  // route set then, and a location update arriving mid-preview must not pull
+  // it back onto the user and crop the routes out of view.
   const hasCentredRef = useRef(false);
   useEffect(() => {
-    if (!origin || hasCentredRef.current || !mapRef.current) return;
-    hasCentredRef.current = true;
-    mapRef.current.animateToRegion({ ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 500);
-  }, [origin]);
+    if (!origin || !mapRef.current) return;
+
+    if (!hasCentredRef.current) {
+      hasCentredRef.current = true;
+      mapRef.current.animateToRegion({ ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 500);
+      return;
+    }
+
+    if (!following || previewing) return;
+    // `animateCamera` rather than `animateToRegion`: it moves the centre and
+    // leaves the zoom alone, so following the user doesn't keep resetting a
+    // zoom level they chose.
+    mapRef.current.animateCamera({ center: origin }, { duration: 500 });
+  }, [origin, following, previewing]);
 
   // Keeps the route panel (and suggestions box) above the on-screen keyboard -
   // both are absolutely positioned, so without this they end up rendered
@@ -526,6 +552,24 @@ export function MapScreen() {
     setTimeout(() => setSuggestionsVisible(false), 150);
   };
 
+  // Backs all the way out of searching: keyboard down, field unfocused,
+  // suggestions gone. `blur()` is explicit rather than left to `dismiss()`,
+  // which lowers the keyboard without always taking focus off the field -
+  // leaving a search bar that still looks active and a caret still blinking.
+  const dismissSearch = () => {
+    inputRef.current?.blur();
+    Keyboard.dismiss();
+    setSuggestionsVisible(false);
+  };
+
+  // The verdict dots on the route panel read as punctuation for the line of
+  // text beside them, so they grow with it.
+  const accessDotSize = {
+    height: scaled(8),
+    width: scaled(8),
+    borderRadius: scaled(8) / 2,
+  };
+
   const selectedRoute = displayRoutes[selectedRouteIndex];
   // The selected route is accessibility-planned either because it *is* ORS's
   // route, or because ORS's route turned out to be this one of Google's.
@@ -555,10 +599,31 @@ export function MapScreen() {
         // them anyway.
         rotateEnabled={false}
         pitchEnabled={false}
+        // While routes are previewed the map is locked: the only decision left
+        // on this screen is which of the routes to take, and panning or
+        // zooming away from them only loses the answer. The camera is already
+        // framed on every route, and tapping a route line or its pill still
+        // selects it - those are annotation presses, not map gestures, so
+        // freezing the camera doesn't disable choosing.
+        scrollEnabled={!previewing}
+        zoomEnabled={!previewing}
         // Fed straight to the pill layer instead of into state here, so a pan
         // re-renders three pills rather than this whole screen.
-        onRegionChange={(r) => pillLayerRef.current?.setRegion(r)}
-        onRegionChangeComplete={(r) => pillLayerRef.current?.setRegion(r)}
+        //
+        // A region change the user drove themselves also ends follow mode.
+        // `isGesture` is what separates that from the programmatic moves this
+        // screen makes constantly (the fit onto a route set, the recentre) -
+        // without it, framing a route would immediately count as the user
+        // panning away. It is reported by the Google provider, which this map
+        // always uses.
+        onRegionChange={(r, details) => {
+          pillLayerRef.current?.setRegion(r);
+          if (details?.isGesture) setFollowing(false);
+        }}
+        onRegionChangeComplete={(r, details) => {
+          pillLayerRef.current?.setRegion(r);
+          if (details?.isGesture) setFollowing(false);
+        }}
         initialRegion={
           origin
             ? { ...origin, latitudeDelta: 0.01, longitudeDelta: 0.01 }
@@ -625,13 +690,54 @@ export function MapScreen() {
         onSelect={setSelectedRouteIndex}
       />
 
+      {/* Only offered once the map has actually stopped following the user -
+          a recentre button on an already-centred map is a control that does
+          nothing. Never during a preview, where the map is frozen on the
+          routes and can't have been dragged off the user in the first place. */}
+      {origin && !following && !previewing && !suggestionsVisible && (
+        <Pressable
+          style={[
+            styles.recenterButton,
+            {
+              backgroundColor: T.cardRaised,
+              height: scaled(48),
+              width: scaled(48),
+              borderRadius: scaled(48) / 2,
+            },
+            T.shadow,
+          ]}
+          onPress={() => setFollowing(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Recentre on my location"
+          hitSlop={8}
+        >
+          <LocateFixed size={scaled(22)} color={T.accent} strokeWidth={2} />
+        </Pressable>
+      )}
+
+      {/* Tapping anywhere off the search bar puts the keyboard away, which is
+          the only way to get back to a full-screen map once the field has
+          focus. Sits under the search bar's zIndex so taps on the field and
+          its suggestion rows still reach them. */}
+      {suggestionsVisible && (
+        <Pressable
+          style={[StyleSheet.absoluteFill, styles.dismissLayer]}
+          onPress={dismissSearch}
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+        />
+      )}
+
       <View style={[styles.searchBar, { top: searchBarTop }]}>
         <View
           style={[styles.searchSurface, { backgroundColor: T.cardRaised }, T.shadow]}
           onLayout={(e) => measureChrome('search', e.nativeEvent.layout.height)}
         >
           <TextInput
-            style={[styles.input, { color: T.text, fontSize: F.body }]}
+            ref={inputRef}
+            // The right padding is the clear button's own scaled width plus
+            // its inset, so a bigger button can't end up sitting on the text.
+            style={[styles.input, { color: T.text, fontSize: F.body, paddingRight: scaled(24) + 20 }]}
             placeholder="Search a destination"
             placeholderTextColor={T.text2}
             value={query}
@@ -653,13 +759,21 @@ export function MapScreen() {
             ) : (
               query.length > 0 && (
                 <Pressable
-                  style={[styles.clearButton, { backgroundColor: T.clearBtn }]}
+                  style={[
+                    styles.clearButton,
+                    {
+                      backgroundColor: T.clearBtn,
+                      height: scaled(24),
+                      width: scaled(24),
+                      borderRadius: scaled(24) / 2,
+                    },
+                  ]}
                   onPress={handleClear}
                   accessibilityLabel="Clear search"
                   accessibilityRole="button"
                   hitSlop={8}
                 >
-                  <Text style={styles.clearButtonText}>✕</Text>
+                  <Text style={[styles.clearButtonText, { fontSize: F.tiny }]}>✕</Text>
                 </Pressable>
               )
             )}
@@ -751,7 +865,7 @@ export function MapScreen() {
               than merely inspected for them afterwards. */}
           {selectedIsAccessible && (
             <View style={styles.accessRow}>
-              <View style={[styles.accessDot, { backgroundColor: T.green }]} />
+              <View style={[accessDotSize, { backgroundColor: T.green }]} />
               <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
                 {ACCESSIBLE_ROUTE_LABELS[mobilityAid]}
               </Text>
@@ -767,7 +881,7 @@ export function MapScreen() {
           {noAccessibleRoute && (
             <View style={styles.accessRow}>
               <View
-                style={[styles.accessDot, { backgroundColor: HAZARD_COLORS['pathway-obstruction'] }]}
+                style={[accessDotSize, { backgroundColor: HAZARD_COLORS['pathway-obstruction'] }]}
               />
               <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
                 No fully accessible route found to here
@@ -790,7 +904,7 @@ export function MapScreen() {
                 <View style={styles.accessRow}>
                   <View
                     style={[
-                      styles.accessDot,
+                      accessDotSize,
                       {
                         backgroundColor:
                           ACCESS_COLORS[accessibility[selectedRouteIndex]!.severity](T),
@@ -849,7 +963,6 @@ const styles = StyleSheet.create({
   searchSurface: { borderRadius: RADIUS.control },
   input: {
     paddingLeft: 16,
-    paddingRight: 44,
     paddingVertical: 15,
   },
   inputAccessory: {
@@ -860,14 +973,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  clearButton: {
-    height: 24,
-    width: 24,
-    borderRadius: 12,
+  // Size and radius are set inline, from the Text Size multiplier.
+  clearButton: { alignItems: 'center', justifyContent: 'center' },
+  clearButtonText: { color: '#fff', fontWeight: '700' },
+  // Below the search bar's zIndex (5) and above the map, so it swallows taps
+  // meant for the map without covering the field it is dismissing.
+  dismissLayer: { zIndex: 3 },
+  // Size and radius are set inline, from the Text Size multiplier.
+  recenterButton: {
+    position: 'absolute',
+    right: SCREEN_MARGIN,
+    bottom: SCREEN_MARGIN,
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 4,
   },
-  clearButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   suggestionsBox: {
     marginTop: 8,
     borderRadius: RADIUS.control,
@@ -897,7 +1017,6 @@ const styles = StyleSheet.create({
   routeVia: { marginTop: 4 },
   routeAccess: { marginTop: 6 },
   accessRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
-  accessDot: { width: 8, height: 8, borderRadius: 4 },
   startButton: {
     marginTop: 14,
     borderRadius: RADIUS.button,

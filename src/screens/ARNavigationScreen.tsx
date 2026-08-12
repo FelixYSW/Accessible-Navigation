@@ -11,7 +11,7 @@ import { bearingBetween, distanceMeters, nextRoutePoint, relativeBearing } from 
 import { useStubHazardDetector } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
-import { VoiceGuidancePill } from '../components/VoiceGuidancePill';
+import { VoiceCuePill } from '../components/VoiceCuePill';
 import { useSettings } from '../theme/SettingsContext';
 import { routeDurationSeconds } from '../services/mobility';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -26,7 +26,7 @@ const TURN_THRESHOLD_DEGREES = 25;
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
   const insets = useSafeAreaInsets();
-  const { T, F, hazardActive, mobilityAid } = useSettings();
+  const { T, F, scaled, hazardActive, mobilityAid } = useSettings();
   const [position, setPosition] = useState<LatLng | null>(null);
   const [heading, setHeading] = useState(0);
 
@@ -81,13 +81,15 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       <HazardOverlay detections={detections} />
 
       {/* The route is left via "End" on the sheet below - a second, smaller
-          exit control at the top was a redundant way to lose the route. */}
+          exit control at the top was a redundant way to lose the route. Both
+          cue types are live on a route, so both get a pill. */}
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
-        <VoiceGuidancePill />
+        <VoiceCuePill cue="turns" />
+        <VoiceCuePill cue="hazards" />
       </View>
 
       <View style={[styles.turnCard, { top: insets.top + 60 }]}>
-        <TurnArrow color={T.green} angle={turnAngle ?? 0} />
+        <TurnArrow color={T.green} angle={turnAngle ?? 0} width={scaled(40)} />
         <Text style={[styles.turnInstruction, { fontSize: F.body }]}>
           {describeTurn(turnAngle)}
         </Text>
@@ -175,10 +177,17 @@ function describeTurn(angle: number | undefined): string {
 }
 
 // The design's chevron: two strokes meeting at a point, rotated to indicate
-// which way to go (0 = straight ahead, positive = right).
-function TurnArrow({ color, angle }: { color: string; angle: number }) {
+// which way to go (0 = straight ahead, positive = right). Sized from the
+// outside so it grows with the instruction underneath it - it is the largest
+// thing on the screen and the last one that should stay small.
+function TurnArrow({ color, angle, width }: { color: string; angle: number; width: number }) {
   return (
-    <Svg width={40} height={34} viewBox="0 0 72 60" style={{ transform: [{ rotate: `${angle}deg` }] }}>
+    <Svg
+      width={width}
+      height={Math.round((width * 34) / 40)}
+      viewBox="0 0 72 60"
+      style={{ transform: [{ rotate: `${angle}deg` }] }}
+    >
       <Path
         d="M36 4 L14 46 M36 4 L58 46"
         stroke={color}
@@ -199,6 +208,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
+    gap: 8,
   },
   turnCard: {
     position: 'absolute',

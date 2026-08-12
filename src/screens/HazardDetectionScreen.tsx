@@ -6,7 +6,7 @@ import Svg, { Path } from 'react-native-svg';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { PulsingDot } from '../components/PulsingDot';
-import { VoiceGuidancePill } from '../components/VoiceGuidancePill';
+import { VoiceCuePill } from '../components/VoiceCuePill';
 import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { HAZARD_CLASSES } from '../types/hazard';
@@ -17,7 +17,7 @@ import { useStubHazardDetector } from '../services/hazardDetector';
 export function HazardDetectionScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const { T, F, hazardActive } = useSettings();
+  const { T, F, scaled, hazardActive } = useSettings();
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -37,10 +37,13 @@ export function HazardDetectionScreen() {
 
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
         <View style={styles.scanPill}>
-          <PulsingDot color={HAZARD_COLORS.pothole} />
+          <PulsingDot color={HAZARD_COLORS.pothole} size={scaled(8)} />
           <Text style={[styles.scanPillText, { fontSize: F.xs }]}>Scanning for hazards</Text>
         </View>
-        <VoiceGuidancePill />
+        {/* Only the hazard half here: there is no route on this screen, so
+            there are no turns to speak. Spoken turn cues stay whatever the
+            user last set them to. */}
+        <VoiceCuePill cue="hazards" />
       </View>
 
       {/* No bottom safe-area padding here: this is a tab screen, and the tab

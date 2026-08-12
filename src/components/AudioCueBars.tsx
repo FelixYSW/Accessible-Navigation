@@ -5,22 +5,25 @@ import { Animated, Easing, StyleSheet, View } from 'react-native';
 // height over 0.9s, the three offset by 0.2s so they read as a waveform
 // rather than a single blinking block.
 const BAR_HEIGHT = 14;
-const BAR_WIDTH = 3;
 const CYCLE_MS = 900;
 const STAGGER_MS = 200;
 const MIN_SCALE = 0.4;
 
-export function AudioCueBars({ color }: { color: string }) {
+// Bar width as a fraction of the height, so a scaled-up waveform keeps its
+// proportions instead of turning into three tall hairlines.
+const WIDTH_RATIO = 3 / BAR_HEIGHT;
+
+export function AudioCueBars({ color, height = BAR_HEIGHT }: { color: string; height?: number }) {
   return (
-    <View style={styles.row}>
+    <View style={[styles.row, { height }]}>
       {[0, 1, 2].map((index) => (
-        <WaveBar key={index} color={color} delay={index * STAGGER_MS} />
+        <WaveBar key={index} color={color} height={height} delay={index * STAGGER_MS} />
       ))}
     </View>
   );
 }
 
-function WaveBar({ color, delay }: { color: string; delay: number }) {
+function WaveBar({ color, height, delay }: { color: string; height: number; delay: number }) {
   const progress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -55,6 +58,8 @@ function WaveBar({ color, delay }: { color: string; delay: number }) {
         styles.bar,
         {
           backgroundColor: color,
+          height,
+          width: Math.max(2, Math.round(height * WIDTH_RATIO)),
           transform: [
             // scaleY pivots on the bar's centre, so the bar is pushed back
             // down by half the height it lost - anchoring it to the baseline
@@ -62,7 +67,7 @@ function WaveBar({ color, delay }: { color: string; delay: number }) {
             {
               translateY: progress.interpolate({
                 inputRange: [0, 1],
-                outputRange: [(BAR_HEIGHT * (1 - MIN_SCALE)) / 2, 0],
+                outputRange: [(height * (1 - MIN_SCALE)) / 2, 0],
               }),
             },
             { scaleY },
@@ -74,6 +79,6 @@ function WaveBar({ color, delay }: { color: string; delay: number }) {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: BAR_HEIGHT },
-  bar: { width: BAR_WIDTH, height: BAR_HEIGHT, borderRadius: 2 },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 2 },
+  bar: { borderRadius: 2 },
 });

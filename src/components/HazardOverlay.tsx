@@ -6,7 +6,8 @@ import { HAZARD_LABELS, type HazardDetection } from '../types/hazard';
 import { HAZARD_ICONS } from './hazardIcons';
 
 // Height reserved above each box for its label chip, so the chip clears the
-// box border instead of overlapping the detection it describes.
+// box border instead of overlapping the detection it describes. Scaled with
+// Text Size, since the chip it has to clear grows with its own label.
 const CHIP_OFFSET = 27;
 
 interface HazardOverlayProps {
@@ -19,7 +20,8 @@ interface HazardOverlayProps {
 // Navigation and Hazard Detection screens so a hazard looks identical in both.
 export function HazardOverlay({ detections }: HazardOverlayProps) {
   const { width, height } = useWindowDimensions();
-  const { F } = useTheme();
+  const { F, scaled } = useTheme();
+  const chipOffset = scaled(CHIP_OFFSET);
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -52,10 +54,10 @@ export function HazardOverlay({ detections }: HazardOverlayProps) {
             <View
               style={[
                 styles.chip,
-                { left, top: top >= CHIP_OFFSET ? top - CHIP_OFFSET : top + 4 },
+                { left, top: top >= chipOffset ? top - chipOffset : top + 4 },
               ]}
             >
-              <Icon size={13} color={color} strokeWidth={2.2} />
+              <Icon size={scaled(13)} color={color} strokeWidth={2.2} />
               <Text style={[styles.chipText, { fontSize: F.tiny }]} numberOfLines={1}>
                 {HAZARD_LABELS[detection.hazardClass]} {Math.round(detection.confidence * 100)}%
               </Text>

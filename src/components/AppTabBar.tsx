@@ -22,7 +22,7 @@ const TAB_LABELS: Record<string, string> = {
 // them from two separate sources and they could disagree about which tab was
 // active.
 export function AppTabBar({ state, navigation }: BottomTabBarProps) {
-  const { T, F } = useTheme();
+  const { T, F, scaled } = useTheme();
   const insets = useSafeAreaInsets();
 
   return (
@@ -66,7 +66,7 @@ export function AppTabBar({ state, navigation }: BottomTabBarProps) {
               }
             }}
           >
-            <Icon size={24} color={color} strokeWidth={2} />
+            <Icon size={scaled(24)} color={color} strokeWidth={2} />
             <Text
               style={[styles.label, { color, fontSize: F.micro }]}
               numberOfLines={2}
