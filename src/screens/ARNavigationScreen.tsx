@@ -10,6 +10,7 @@ import { HAZARD_CLASSES } from '../types/hazard';
 import { bearingBetween, distanceMeters, nextRoutePoint, relativeBearing } from '../utils/geo';
 import { useStubHazardDetector } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
+import { GroundArrows } from '../components/GroundArrows';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { VoiceCuePill } from '../components/VoiceCuePill';
 import { useSettings } from '../theme/SettingsContext';
@@ -78,6 +79,10 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   return (
     <CameraStage isActive>
+      {/* Under the hazard overlay: a hazard on the path is the more urgent of
+          the two, and must never end up behind a chevron pointing at it. */}
+      <GroundArrows turnAngle={turnAngle} metersToTarget={metersToTarget} color={T.green} />
+
       <HazardOverlay detections={detections} />
 
       {/* The route is left via "End" on the sheet below - a second, smaller
@@ -88,16 +93,22 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         <VoiceCuePill cue="hazards" />
       </View>
 
-      <View style={[styles.turnCard, { top: insets.top + 60 }]}>
-        <TurnArrow color={T.green} angle={turnAngle ?? 0} width={scaled(40)} />
-        <Text style={[styles.turnInstruction, { fontSize: F.body }]}>
-          {describeTurn(turnAngle)}
-        </Text>
-        {metersToTarget !== undefined && (
-          <Text style={[styles.turnDistance, { fontSize: F.tinySm }]}>
-            for {formatDistance(metersToTarget)}
+      {/* The instruction reads as one line across the top, the way it does on
+          a driving screen: the arrow says which way, the words say the same
+          thing again for anyone who can't read a small rotated glyph, and the
+          distance says when. */}
+      <View style={[styles.banner, { top: insets.top + 60 }]}>
+        <TurnArrow color={T.green} angle={turnAngle ?? 0} width={scaled(44)} />
+        <View style={styles.bannerText}>
+          <Text style={[styles.turnInstruction, { fontSize: F.h2 }]} numberOfLines={1}>
+            {describeTurn(turnAngle)}
           </Text>
-        )}
+          {metersToTarget !== undefined && (
+            <Text style={[styles.turnDistance, { fontSize: F.sm }]} numberOfLines={1}>
+              in {formatDistance(metersToTarget)}
+            </Text>
+          )}
+        </View>
       </View>
 
       <View style={[styles.sheet, { bottom: insets.bottom > 0 ? insets.bottom : 32 }]}>
@@ -210,18 +221,21 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 8,
   },
-  turnCard: {
+  banner: {
     position: 'absolute',
-    alignSelf: 'center',
-    backgroundColor: 'rgba(20,20,20,0.7)',
-    borderRadius: 20,
+    left: SCREEN_MARGIN,
+    right: SCREEN_MARGIN,
+    backgroundColor: 'rgba(20,20,20,0.78)',
+    borderRadius: RADIUS.section,
     paddingVertical: 14,
-    paddingHorizontal: 22,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 14,
   },
+  bannerText: { flex: 1 },
   turnInstruction: { color: '#fff', fontWeight: '700' },
-  turnDistance: { color: 'rgba(255,255,255,0.6)' },
+  turnDistance: { color: 'rgba(255,255,255,0.65)', marginTop: 2 },
   sheet: {
     position: 'absolute',
     left: SCREEN_MARGIN,

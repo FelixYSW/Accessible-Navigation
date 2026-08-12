@@ -190,17 +190,36 @@ export function relativeBearing(heading: number, bearing: number): number {
   return diff;
 }
 
-// Given a route polyline and the user's current position, finds the next
-// point on the route that is still ahead of the user (i.e. the nearest
-// vertex the user hasn't reached yet), for use as the AR arrow's target.
+// Given a route polyline and the user's current position, finds the next point
+// on the route that is still ahead of the user - the nearest vertex they
+// haven't reached yet - for use as the AR arrow's target.
+//
+// The search starts from the vertex the walker is closest to, not from the
+// start of the route. Scanning from the start instead returns the first vertex
+// further than the reached radius, and once the walker is more than that far
+// from the origin - which happens within the first few paces - that vertex is
+// the origin itself. The arrow would then point back the way they came for the
+// rest of the walk.
 export function nextRoutePoint(
   routeCoordinates: LatLng[],
   currentPosition: LatLng,
   reachedRadiusMeters = 12,
 ): LatLng | undefined {
-  for (const point of routeCoordinates) {
-    if (distanceMeters(currentPosition, point) > reachedRadiusMeters) {
-      return point;
+  if (routeCoordinates.length === 0) return undefined;
+
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  for (let i = 0; i < routeCoordinates.length; i += 1) {
+    const distance = distanceMeters(currentPosition, routeCoordinates[i]);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = i;
+    }
+  }
+
+  for (let i = nearestIndex; i < routeCoordinates.length; i += 1) {
+    if (distanceMeters(currentPosition, routeCoordinates[i]) > reachedRadiusMeters) {
+      return routeCoordinates[i];
     }
   }
   return routeCoordinates[routeCoordinates.length - 1];
