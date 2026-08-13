@@ -1,6 +1,9 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/RootNavigator';
 import { Rabbit, Turtle } from 'lucide-react-native';
 import { SegmentedField } from '../components/SegmentedField';
 import { HAZARD_ICONS } from '../components/hazardIcons';
@@ -18,6 +21,9 @@ import { HAZARD_CLASSES, HAZARD_SETTING_LABELS } from '../types/hazard';
 // needing a count per screen size.
 const PACE_DOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 
+// Set false to hide the AR Geospatial test row once the measurements are done.
+const SHOW_GEOSPATIAL_TEST = true;
+
 const TEXT_SIZES: { key: FontScaleKey; label: string }[] = [
   { key: 'default', label: 'Default' },
   { key: 'large', label: 'Large' },
@@ -26,6 +32,7 @@ const TEXT_SIZES: { key: FontScaleKey; label: string }[] = [
 
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const {
     T,
     F,
@@ -169,6 +176,38 @@ export function SettingsScreen() {
           </Text>
         </View>
       </View>
+
+      {/* Temporary: the way into the Geospatial measurement screen, which
+          exists to answer whether ARCore can localise accurately where this app
+          is used. Remove this section, the screen and its route once that is
+          settled.
+
+          Gated on a constant rather than on `__DEV__`, because a build
+          installed on a phone for field testing is a release build - `__DEV__`
+          is false in it, and the row would be invisible exactly where it needs
+          to be used. */}
+      {SHOW_GEOSPATIAL_TEST && Platform.OS === 'ios' && (
+        <>
+          <SectionLabel>Developer</SectionLabel>
+          <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
+            <Pressable
+              style={[styles.row, styles.rowInline]}
+              onPress={() => navigation.navigate('ARGeospatialTest')}
+              accessibilityRole="button"
+            >
+              <View style={styles.rowTextBlock}>
+                <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
+                  AR Geospatial test
+                </Text>
+                <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
+                  VPS coverage and pose accuracy where you are standing
+                </Text>
+              </View>
+              <Text style={{ color: T.text2, fontSize: F.body }}>›</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
 
       <SectionLabel>Hazard types</SectionLabel>
       <View style={styles.hazardList}>

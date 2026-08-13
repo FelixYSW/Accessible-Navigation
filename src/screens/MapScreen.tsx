@@ -59,8 +59,19 @@ const LOCATION_UPDATE_DISTANCE_METERS = 25;
 // rather than half off it. Roughly half a pill each way, plus a margin.
 const PILL_CLEARANCE = { horizontal: 50, vertical: 34 };
 
-// The zoom the map opens on, and the one the recentre button returns to: about
-// a 1km span, which is the scale a walking route is read at.
+// The zoom the map opens on, and the one the recentre button returns to:
+// about a 1km span, which is the scale a walking route is read at.
+//
+// Expressed as a zoom level rather than a region, because a region is not a
+// zoom - `animateToRegion` *fits* the given span into the viewport, so which
+// of the two deltas binds depends on the aspect ratio, and the same region can
+// settle at different zooms depending on where the camera started. A zoom
+// level is the same every time, which is what "default zoom" has to mean.
+const DEFAULT_ZOOM = 16;
+
+// The span used for `initialRegion` only, which is a region prop and has no
+// zoom form. Roughly equivalent to DEFAULT_ZOOM; it is what the map shows for
+// the moment before the first location fix replaces it.
 const DEFAULT_SPAN = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
 
 // Stand-ins used to frame the routes on the very first search, before the
@@ -275,6 +286,14 @@ export function MapScreen() {
   // milliseconds. That is what left the app centred on the user at the wide
   // fallback zoom instead of the default one: the pan happened, the zoom
   // change went nowhere.
+  // Every "go back to the user" on this screen goes through here, so the first
+  // fix, the recentre button and the end of a preview cannot end up at
+  // different zooms - which is exactly what happened when each made its own
+  // camera call.
+  const centreOnUser = useCallback((on: LatLng) => {
+    mapRef.current?.animateCamera({ center: on, zoom: DEFAULT_ZOOM }, { duration: 500 });
+  }, []);
+
   const hasCentredRef = useRef(false);
   const followingRef = useRef(following);
   followingRef.current = following;
@@ -292,14 +311,14 @@ export function MapScreen() {
 
     if (!hasCentredRef.current) {
       hasCentredRef.current = true;
-      mapRef.current.animateToRegion({ ...origin, ...DEFAULT_SPAN }, 500);
+      centreOnUser(origin);
       return;
     }
 
     if (!followingRef.current || previewing) return;
 
     if (leftPreview) {
-      mapRef.current.animateToRegion({ ...origin, ...DEFAULT_SPAN }, 500);
+      centreOnUser(origin);
       return;
     }
 
@@ -307,7 +326,7 @@ export function MapScreen() {
     // leaves the zoom alone, so walking along doesn't keep pulling the map
     // back to a zoom level the user has since changed.
     mapRef.current.animateCamera({ center: origin }, { duration: 500 });
-  }, [origin, previewing, mapReady]);
+  }, [origin, previewing, mapReady, centreOnUser]);
 
   // Keeps the route panel (and suggestions box) above the on-screen keyboard -
   // both are absolutely positioned, so without this they end up rendered
@@ -615,7 +634,7 @@ export function MapScreen() {
     if (previewing) {
       fitRoutes(displayRoutes);
     } else if (origin) {
-      mapRef.current?.animateToRegion({ ...origin, ...DEFAULT_SPAN }, 500);
+      centreOnUser(origin);
     }
   };
 
