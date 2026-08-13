@@ -95,17 +95,21 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
         onAnchorsUpdate={(event) => setAnchors(event.nativeEvent.anchors)}
       />
 
-      {/* Each anchor, where the session currently says it is. */}
+      {/* Both kinds of anchor, told apart by colour: white for the ARKit
+          control anchors, green for the geospatial ones. Watching which of the
+          two wanders is the whole diagnostic - if the white dots crawl the
+          tracking is at fault, and if only the green ones do it is the
+          localisation. */}
       <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
         {anchors
           .filter((anchor) => anchor.visible)
           .map((anchor) => (
             <Circle
-              key={anchor.index}
+              key={`${anchor.kind}-${anchor.index}`}
               cx={anchor.x}
               cy={anchor.y}
               r={Math.max(6, 40 / Math.max(1, anchor.distance))}
-              fill={T.green}
+              fill={anchor.kind === 'geospatial' ? T.green : '#ffffff'}
               fillOpacity={0.85}
               stroke="rgba(0,0,0,0.5)"
               strokeWidth={1.5}
@@ -146,8 +150,13 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
               fontSize={F.sm}
             />
             <Row
-              label="Anchors visible"
-              value={`${anchors.filter((a) => a.visible).length} of ${testAnchors.length}`}
+              label="Control (white)"
+              value={`${countVisible(anchors, 'local')} of 3 in view`}
+              fontSize={F.sm}
+            />
+            <Row
+              label="Geospatial (green)"
+              value={`${countVisible(anchors, 'geospatial')} of ${testAnchors.length} in view`}
               fontSize={F.sm}
             />
           </>
@@ -164,6 +173,10 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
       </Pressable>
     </View>
   );
+}
+
+function countVisible(anchors: ProjectedAnchor[], kind: ProjectedAnchor['kind']): number {
+  return anchors.filter((anchor) => anchor.kind === kind && anchor.visible).length;
 }
 
 function Row({ label, value, fontSize }: { label: string; value: string; fontSize: number }) {

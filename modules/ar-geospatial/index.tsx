@@ -23,14 +23,20 @@ export interface GeospatialUpdate {
   error?: string;
 }
 
-/** One anchored route point, projected to where it appears on screen. */
+/** One anchor, projected to where it appears on screen. */
 export interface ProjectedAnchor {
   index: number;
+  /** `local` anchors are plain ARKit ones, planted ahead of wherever the phone
+   *  was when tracking started. They need no VPS, GPS or coverage of any kind,
+   *  so they work indoors - they are the control for judging whether the
+   *  tracking itself holds still. `geospatial` anchors are pinned to real
+   *  coordinates and only appear once Earth is localised. */
+  kind: 'local' | 'geospatial';
   x: number;
   y: number;
   /** Metres from the camera. */
   distance: number;
-  /** False when it is behind the camera or its position isn't yet resolved. */
+  /** False when it is behind the camera. */
   visible: boolean;
 }
 

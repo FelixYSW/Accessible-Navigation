@@ -28,6 +28,10 @@ struct GeoAnchorRecord: Record {
 /// where it hasn't, it falls back to GPS and is no better than the phone's own
 /// fix - but the tracking underneath is unaffected either way.
 final class ARGeospatialView: ExpoView, ARSessionDelegate {
+  /// How far ahead the control anchors sit, in metres. Matches the distances
+  /// the JS side labels them with.
+  static let testDistancesM: [Double] = [3, 6, 10]
+
   let onGeospatialUpdate = EventDispatcher()
   let onAnchorsUpdate = EventDispatcher()
 
@@ -40,6 +44,17 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   private var requestedAnchors: [CLLocationCoordinate2D] = []
   private var placedAnchors: [GARAnchor] = []
   private var anchorsAreStale = false
+
+  /// Plain ARKit anchors, planted straight ahead on the floor as soon as the
+  /// camera is tracking and independent of anything geospatial.
+  ///
+  /// They are the control in the experiment. ARKit's tracking needs no VPS, no
+  /// GPS and no coverage, so these can be checked anywhere - indoors, in a
+  /// stairwell, in an alley. If they stay stuck to the floor while the phone is
+  /// walked around, the tracking is sound and the drift problem is solved
+  /// whatever Geospatial turns out to offer. If they crawl, nothing built on
+  /// top of this will hold still either.
+  private var localAnchors: [ARAnchor] = []
 
   private var vpsAvailability = "unknown"
   private var vpsRequested = false
@@ -105,7 +120,14 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   }
 
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
-    guard let garSession else { return }
+    placeLocalAnchorsIfNeeded(frame: frame)
+
+    guard let garSession else {
+      // No ARCore session yet - the local anchors are still worth drawing, so
+      // the tracking can be judged on its own.
+      emitAnchors(garFrame: nil, arFrame: frame)
+      return
+    }
 
     do {
       let garFrame = try garSession.update(frame)
@@ -132,8 +154,8 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     if let transform {
       requestVpsAvailabilityOnce(at: transform.coordinate)
       rebuildAnchorsIfNeeded(cameraAltitude: transform.altitude)
-      projectAnchors(in: garFrame, arFrame: arFrame)
     }
+    emitAnchors(garFrame: garFrame, arFrame: arFrame)
 
     // Throttled: ARKit runs at 60Hz, and the numbers on screen are read by a
     // human standing still. Anchor positions are sent every frame; only this
@@ -188,40 +210,92 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     }
   }
 
-  /// Where each anchor lands on screen, in points, for the JS layer to draw on.
-  private func projectAnchors(in garFrame: GARFrame, arFrame: ARFrame) {
-    guard !placedAnchors.isEmpty else { return }
+  /// Plants the control anchors once, the moment tracking is good enough to
+  /// trust a position. They go on the floor - a fixed drop below the camera -
+  /// straight ahead of wherever the phone is pointing.
+  private func placeLocalAnchorsIfNeeded(frame: ARFrame) {
+    guard localAnchors.isEmpty else { return }
+    guard case .normal = frame.camera.trackingState else { return }
 
+    let camera = frame.camera.transform
+    let eye = simd_float3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
+
+    // The camera looks down its own -Z. Flattened onto the horizontal plane,
+    // so that pointing the phone slightly up or down doesn't send the row of
+    // anchors into the sky or through the floor.
+    let ahead = simd_float3(-camera.columns.2.x, 0, -camera.columns.2.z)
+    guard simd_length(ahead) > 0.001 else { return }
+    let direction = simd_normalize(ahead)
+
+    for distance in Self.testDistancesM {
+      var transform = matrix_identity_float4x4
+      transform.columns.3 = simd_float4(
+        eye + direction * Float(distance) - simd_float3(0, 1.5, 0),
+        1
+      )
+      let anchor = ARAnchor(name: "control-\(distance)", transform: transform)
+      sceneView.session.add(anchor: anchor)
+      localAnchors.append(anchor)
+    }
+  }
+
+  /// Where every anchor lands on screen, in points, for the JS layer to draw
+  /// on. Both kinds go in the same event so the two can be compared directly:
+  /// if the control anchors hold and the geospatial ones wander, the problem is
+  /// the localisation rather than the tracking.
+  private func emitAnchors(garFrame: GARFrame?, arFrame: ARFrame) {
     let viewport = bounds.size
     guard viewport.width > 0, viewport.height > 0 else { return }
 
-    let cameraTransform = arFrame.camera.transform
-    let projected: [[String: Any]] = garFrame.anchors.enumerated().map { index, anchor in
-      let world = anchor.transform.columns.3
-      let position = simd_float3(world.x, world.y, world.z)
+    var projected: [[String: Any]] = []
 
-      // Anything behind the lens projects to a point on screen as readily as
-      // anything in front of it, so being in front has to be checked
-      // separately: in camera space the view looks down -Z.
-      let inCameraSpace = simd_mul(cameraTransform.inverse, simd_float4(position, 1))
-      let isAhead = inCameraSpace.z < 0
-
-      let point = arFrame.camera.projectPoint(
-        position,
-        orientation: .portrait,
-        viewportSize: viewport
+    for (index, anchor) in localAnchors.enumerated() {
+      projected.append(
+        project(transform: anchor.transform, index: index, kind: "local", arFrame: arFrame, viewport: viewport)
       )
+    }
 
-      return [
-        "index": index,
-        "x": point.x,
-        "y": point.y,
-        "distance": Double(simd_length(simd_float3(inCameraSpace.x, inCameraSpace.y, inCameraSpace.z))),
-        "visible": isAhead && anchor.hasValidTransform,
-      ]
+    if let garFrame {
+      for (index, anchor) in garFrame.anchors.enumerated() where anchor.hasValidTransform {
+        projected.append(
+          project(transform: anchor.transform, index: index, kind: "geospatial", arFrame: arFrame, viewport: viewport)
+        )
+      }
     }
 
     onAnchorsUpdate(["anchors": projected])
+  }
+
+  private func project(
+    transform: simd_float4x4,
+    index: Int,
+    kind: String,
+    arFrame: ARFrame,
+    viewport: CGSize
+  ) -> [String: Any] {
+    let world = transform.columns.3
+    let position = simd_float3(world.x, world.y, world.z)
+
+    // Anything behind the lens projects onto the screen as readily as anything
+    // in front of it, so being in front has to be checked separately: in
+    // camera space the view looks down -Z.
+    let inCameraSpace = simd_mul(arFrame.camera.transform.inverse, simd_float4(position, 1))
+    let point = arFrame.camera.projectPoint(
+      position,
+      orientation: .portrait,
+      viewportSize: viewport
+    )
+
+    return [
+      "index": index,
+      "kind": kind,
+      "x": point.x,
+      "y": point.y,
+      "distance": Double(
+        simd_length(simd_float3(inCameraSpace.x, inCameraSpace.y, inCameraSpace.z))
+      ),
+      "visible": inCameraSpace.z < 0,
+    ]
   }
 
   /// Asked once, as soon as there is a location to ask about. The answer is
