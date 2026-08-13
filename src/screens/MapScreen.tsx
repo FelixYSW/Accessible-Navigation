@@ -39,8 +39,9 @@ import {
   hasAccessibleRoutingKey,
   NoAccessibleRouteError,
 } from '../services/accessibleRouting';
-import { RoutePillLayer } from '../components/RoutePillLayer';
-import type { RoutePillDescriptor, RoutePillLayerHandle } from '../components/RoutePillLayer';
+import { RoutePillMarkers } from '../components/RoutePillMarkers';
+import type { RoutePillDescriptor } from '../components/RoutePillMarkers';
+import type { MapRegion } from '../utils/geo';
 import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN, type Palette } from '../theme/tokens';
 
@@ -97,7 +98,6 @@ type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 
 export function MapScreen() {
   const mapRef = useRef<MapView>(null);
-  const pillLayerRef = useRef<RoutePillLayerHandle>(null);
   const inputRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<MapNavigation>();
@@ -118,6 +118,14 @@ export function MapScreen() {
   // Whether the camera is still tracking the user. True until they drag the
   // map somewhere else, and back to true when they tap Recentre.
   const [following, setFollowing] = useState(true);
+  // Set once the native map is laid out and will accept camera commands.
+  const [mapReady, setMapReady] = useState(false);
+  // The map's settled region and its pixel size. Held only so the pill markers
+  // can tell which of them would overlap at this zoom - the map itself does
+  // the positioning, so this deliberately updates when a gesture ends rather
+  // than on every frame of one.
+  const [region, setRegion] = useState<MapRegion | null>(null);
+  const [mapSize, setMapSize] = useState<{ width: number; height: number } | null>(null);
   const [warning, setWarning] = useState<{ title: string; message: string } | null>(null);
   // OSM accessibility screening, one entry per route (null where the lookup
   // failed - "unknown", which must never be presented as "clear").
@@ -261,11 +269,26 @@ export function MapScreen() {
   // that turning it back on doesn't re-run this effect: the recentre button
   // does its own, zoom-resetting move, and a second animation racing it would
   // undo the zoom half of it.
+  // Gated on the map reporting itself ready, not just on the ref existing. A
+  // camera call made before the native map has laid out is silently dropped,
+  // and the first fix often arrives first - the cached position comes back in
+  // milliseconds. That is what left the app centred on the user at the wide
+  // fallback zoom instead of the default one: the pan happened, the zoom
+  // change went nowhere.
   const hasCentredRef = useRef(false);
   const followingRef = useRef(following);
   followingRef.current = following;
+  const wasPreviewingRef = useRef(false);
   useEffect(() => {
-    if (!origin || !mapRef.current) return;
+    if (!origin || !mapReady || !mapRef.current) return;
+
+    // Whether the routes have just gone away - cleared from the search bar,
+    // or invalidated by typing over the destination. However it happened, the
+    // camera is left framed on routes that are no longer drawn, at a zoom
+    // chosen to fit them, so going back to the user means going back to the
+    // default zoom too and not just sliding the centre across.
+    const leftPreview = wasPreviewingRef.current && !previewing;
+    wasPreviewingRef.current = previewing;
 
     if (!hasCentredRef.current) {
       hasCentredRef.current = true;
@@ -274,11 +297,17 @@ export function MapScreen() {
     }
 
     if (!followingRef.current || previewing) return;
+
+    if (leftPreview) {
+      mapRef.current.animateToRegion({ ...origin, ...DEFAULT_SPAN }, 500);
+      return;
+    }
+
     // `animateCamera` rather than `animateToRegion`: it moves the centre and
     // leaves the zoom alone, so walking along doesn't keep pulling the map
     // back to a zoom level the user has since changed.
     mapRef.current.animateCamera({ center: origin }, { duration: 500 });
-  }, [origin, previewing]);
+  }, [origin, previewing, mapReady]);
 
   // Keeps the route panel (and suggestions box) above the on-screen keyboard -
   // both are absolutely positioned, so without this they end up rendered
@@ -619,6 +648,7 @@ export function MapScreen() {
         // throw away the camera and drop the user back at a default view every
         // time they toggled Dark Mode.
         userInterfaceStyle={darkMode ? 'dark' : 'light'}
+        onMapReady={() => setMapReady(true)}
         // The pills are positioned from `region`, which carries a centre and a
         // lat/lng span but no heading or pitch. Rotating or tilting the camera
         // would leave that projection describing a map orientation the user is
@@ -627,23 +657,20 @@ export function MapScreen() {
         // them anyway.
         rotateEnabled={false}
         pitchEnabled={false}
-        // Fed straight to the pill layer instead of into state here, so a pan
-        // re-renders three pills rather than this whole screen.
-        //
-        // A region change the user drove themselves also ends follow mode.
+        // A region change the user drove themselves ends follow mode.
         // `isGesture` is what separates that from the programmatic moves this
         // screen makes constantly (the fit onto a route set, the recentre) -
         // without it, framing a route would immediately count as the user
         // panning away. It is reported by the Google provider, which this map
         // always uses.
-        onRegionChange={(r, details) => {
-          pillLayerRef.current?.setRegion(r);
+        onRegionChange={(_, details) => {
           if (details?.isGesture) setFollowing(false);
         }}
         onRegionChangeComplete={(r, details) => {
-          pillLayerRef.current?.setRegion(r);
+          setRegion(r);
           if (details?.isGesture) setFollowing(false);
         }}
+        onLayout={(e) => setMapSize(e.nativeEvent.layout)}
         initialRegion={
           origin
             ? { ...origin, ...DEFAULT_SPAN }
@@ -701,14 +728,17 @@ export function MapScreen() {
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
           </>
         )}
-      </MapView>
 
-      <RoutePillLayer
-        ref={pillLayerRef}
-        pills={pills}
-        selectedIndex={selectedRouteIndex}
-        onSelect={setSelectedRouteIndex}
-      />
+        {/* Map children, so the map moves them itself and each pill stays on
+            its own bit of road while the map is dragged. */}
+        <RoutePillMarkers
+          pills={pills}
+          selectedIndex={selectedRouteIndex}
+          onSelect={setSelectedRouteIndex}
+          region={region}
+          size={mapSize}
+        />
+      </MapView>
 
       {/* Offered only once the map has actually been moved off its home - on
           an already-centred map it would be a control that does nothing. What

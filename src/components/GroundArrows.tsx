@@ -11,16 +11,24 @@ import Svg, { Polygon } from 'react-native-svg';
 // further off it is. A scaled sprite reads as a sticker on the lens; this
 // reads as paint on the ground, which is the point of the view.
 //
-// What the model assumes, because this app deliberately runs a 2D overlay over
-// a plain camera preview rather than an AR session (Investigation Report,
-// 2.2.2 Sub-Domain 3): the phone is held at about chest height, tilted down by
-// a fixed amount, with a typical phone camera's field of view. There is no
-// pose tracking here to measure any of it. So the chevrons show which way to
-// go; they are not survey marks, and a walker reads their direction rather
-// than the exact paving slab they land on.
+// The tilt of the phone is measured (see the device-motion listener on the AR
+// screen) and passed in, which is what keeps the chevrons on the ground rather
+// than glued to the middle of the screen: point the phone up at the buildings
+// and the pavement - and the chevrons on it - slides off the bottom of the
+// frame, exactly as it does in life.
+//
+// Height and field of view are still assumed, because this app deliberately
+// runs a 2D overlay over a plain camera preview rather than an AR session
+// (Investigation Report, 2.2.2 Sub-Domain 3) and there is no pose tracking to
+// measure them with. So the chevrons show which way to go; they are not survey
+// marks, and a walker reads their direction rather than the exact paving slab
+// they land on.
 const CAMERA_HEIGHT_M = 1.4;
-const CAMERA_PITCH_DEG = 30;
 const CAMERA_FOV_DEG = 62;
+
+// Used until the first device-motion reading arrives - roughly how a phone is
+// held when walking with it.
+export const DEFAULT_CAMERA_PITCH_DEG = 30;
 
 // Where the chevrons sit along the path, in metres ahead. Kept close and few:
 // the ground compresses hard towards the horizon, and a chevron out at 13m
@@ -73,6 +81,8 @@ interface GroundArrowsProps {
    *  only reach a few metres out. */
   metersToNext: number | undefined;
   bearingAfterNext: number | undefined;
+  /** How far the phone is tilted down from level, in degrees. */
+  pitchDegrees: number;
   color: string;
 }
 
@@ -80,6 +90,7 @@ export function GroundArrows({
   bearingToNext,
   metersToNext,
   bearingAfterNext,
+  pitchDegrees,
   color,
 }: GroundArrowsProps) {
   const { width, height } = useWindowDimensions();
@@ -90,10 +101,11 @@ export function GroundArrows({
       bearingToNext,
       metersToNext ?? Infinity,
       bearingAfterNext ?? bearingToNext,
+      pitchDegrees,
       width,
       height,
     );
-  }, [bearingToNext, metersToNext, bearingAfterNext, width, height]);
+  }, [bearingToNext, metersToNext, bearingAfterNext, pitchDegrees, width, height]);
 
   if (chevrons.length === 0) return null;
 
@@ -126,6 +138,7 @@ function buildChevrons(
   bearingToNextDegrees: number,
   metersToNext: number,
   bearingAfterNextDegrees: number,
+  pitchDegrees: number,
   width: number,
   height: number,
 ): { points: string; opacity: number }[] {
@@ -136,7 +149,7 @@ function buildChevrons(
   );
   // Focal length in pixels, from the field of view the preview is showing.
   const focal = width / 2 / Math.tan(toRadians(CAMERA_FOV_DEG) / 2);
-  const pitch = toRadians(CAMERA_PITCH_DEG);
+  const pitch = toRadians(pitchDegrees);
 
   const built: { points: string; opacity: number }[] = [];
 

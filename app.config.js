@@ -26,6 +26,8 @@ module.exports = {
           'This app uses the camera to detect sidewalk hazards such as potholes, slippery surfaces, and obstacles in real time.',
         NSLocationWhenInUseUsageDescription:
           'This app uses your location to calculate walking routes and warn you about nearby hazards.',
+        NSMotionUsageDescription:
+          'This app reads how your phone is tilted so the on-screen direction arrows sit on the ground ahead of you.',
         ITSAppUsesNonExemptEncryption: false,
       },
     },

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
+import { DeviceMotion } from 'expo-sensors';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import type { LatLng, RouteStep, WalkingRoute } from '../types/route';
@@ -15,7 +16,7 @@ import {
 } from '../utils/geo';
 import { useStubHazardDetector } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
-import { GroundArrows } from '../components/GroundArrows';
+import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
 import {
   MANEUVER_ICONS,
   MANEUVER_LABELS,
@@ -32,12 +33,31 @@ import { formatDistance, formatDuration } from '../utils/format';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ARNavigation'>;
 
+// How often the phone's tilt is read, and how much of each reading is taken.
+// 20Hz is well under the sensor's rate but well over what the eye needs, and
+// taking a quarter of each reading settles in about a fifth of a second -
+// quick enough to feel attached to the phone, slow enough not to shiver.
+const PITCH_UPDATE_MS = 50;
+const PITCH_SMOOTHING = 0.25;
+
+// Clearance between the safe area and the instruction banner, which is the
+// topmost thing on this screen.
+const BANNER_TOP_GAP = 4;
+
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
   const insets = useSafeAreaInsets();
   const { T, F, scaled, hazardActive, mobilityAid } = useSettings();
   const [position, setPosition] = useState<LatLng | null>(null);
   const [heading, setHeading] = useState(0);
+  // How far the phone is tilted down from level. Measured, so the ground
+  // arrows sit on the actual ground instead of wherever a fixed guess put
+  // them - look up at the buildings and they slide off the bottom of the
+  // frame, which is where the pavement has gone.
+  const [pitch, setPitch] = useState(DEFAULT_CAMERA_PITCH_DEG);
+  // The banner's own height, so the pills can sit under it rather than at a
+  // guessed offset that a longer street name would push them into.
+  const [bannerHeight, setBannerHeight] = useState(0);
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -64,6 +84,24 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       positionSubscription?.remove();
       headingSubscription?.remove();
     };
+  }, []);
+
+  // Device attitude, for the camera's tilt.
+  //
+  // `beta` is the phone's front-to-back rotation: 90 degrees with the screen
+  // upright, which is where the rear camera looks straight out at the horizon
+  // and the tilt is zero. So tilt is what's left of a right angle.
+  //
+  // Low-pass filtered, because raw attitude jitters by a degree or two even
+  // held still, and a jittering tilt makes the whole run of chevrons shiver.
+  useEffect(() => {
+    DeviceMotion.setUpdateInterval(PITCH_UPDATE_MS);
+    const subscription = DeviceMotion.addListener(({ rotation }) => {
+      if (!rotation) return;
+      const measured = 90 - (rotation.beta * 180) / Math.PI;
+      setPitch((current) => current + (measured - current) * PITCH_SMOOTHING);
+    });
+    return () => subscription.remove();
   }, []);
 
   // Two directions matter, not one: the way the route runs from here to the
@@ -153,15 +191,20 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         bearingToNext={bearingToNext}
         metersToNext={metersToTarget}
         bearingAfterNext={bearingAfterNext}
+        pitchDegrees={pitch}
         color={T.green}
       />
 
       <HazardOverlay detections={detections} />
 
-      {/* The route is left via "End" on the sheet below - a second, smaller
-          exit control at the top was a redundant way to lose the route. Both
-          cue types are live on a route, so both get a pill. */}
-      <View style={[styles.topRow, { top: insets.top + 4 }]}>
+      {/* Below the banner, not above it: the instruction is what the screen is
+          for, so it takes the top of the frame and the cue switches sit under
+          it. Offset by the banner's measured height rather than a constant,
+          since a long street name can wrap it onto another line.
+          The route is left via "End" on the sheet below - a second, smaller
+          exit control up here was a redundant way to lose the route. Both cue
+          types are live on a route, so both get a pill. */}
+      <View style={[styles.topRow, { top: insets.top + BANNER_TOP_GAP + bannerHeight + 8 }]}>
         <VoiceCuePill cue="turns" />
         <VoiceCuePill cue="hazards" />
       </View>
@@ -171,7 +214,10 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           a glance while walking - then the street it puts you on, then what
           that street heads towards. The instruction in words comes last, for
           anyone who can't read a small rotated glyph. */}
-      <View style={[styles.banner, { top: insets.top + 60 }]}>
+      <View
+        style={[styles.banner, { top: insets.top + BANNER_TOP_GAP }]}
+        onLayout={(e) => setBannerHeight(e.nativeEvent.layout.height)}
+      >
         <ManeuverIcon size={scaled(46)} color="#fff" strokeWidth={2.2} />
         <View style={styles.bannerText}>
           <Text style={[styles.bannerDistance, { fontSize: F.h1 }]} numberOfLines={1}>
