@@ -61,6 +61,10 @@ module.exports = {
           androidGoogleMapsApiKey: GOOGLE_MAPS_API_KEY,
         },
       ],
+      // Needed by the ARCore pod the ar-geospatial module pulls in - see the
+      // plugin for why. Must stay after the plugins above, since it rewrites
+      // the Podfile they contribute to.
+      './plugins/withModularHeaders',
     ],
     extra: {
       googleMapsApiKey: GOOGLE_MAPS_API_KEY,
