@@ -205,6 +205,17 @@ export function nextRoutePoint(
   currentPosition: LatLng,
   reachedRadiusMeters = 12,
 ): LatLng | undefined {
+  const index = nextRoutePointIndex(routeCoordinates, currentPosition, reachedRadiusMeters);
+  return index === undefined ? undefined : routeCoordinates[index];
+}
+
+/** As `nextRoutePoint`, but returns the index - so a caller can also look at
+ *  what the route does *after* that point. */
+export function nextRoutePointIndex(
+  routeCoordinates: LatLng[],
+  currentPosition: LatLng,
+  reachedRadiusMeters = 12,
+): number | undefined {
   if (routeCoordinates.length === 0) return undefined;
 
   let nearestIndex = 0;
@@ -219,10 +230,35 @@ export function nextRoutePoint(
 
   for (let i = nearestIndex; i < routeCoordinates.length; i += 1) {
     if (distanceMeters(currentPosition, routeCoordinates[i]) > reachedRadiusMeters) {
-      return routeCoordinates[i];
+      return i;
     }
   }
-  return routeCoordinates[routeCoordinates.length - 1];
+  return routeCoordinates.length - 1;
+}
+
+// The direction the route runs once it is past `index`, as a compass bearing.
+//
+// Measured to a point a good way further along rather than to the very next
+// vertex: route polylines are stitched from per-step geometry and their
+// vertices can sit a couple of metres apart, so the bearing to the immediate
+// next one is mostly noise. Undefined at the end of the route, where there is
+// no onward direction to report.
+export function routeBearingAfter(
+  routeCoordinates: LatLng[],
+  index: number,
+  lookAheadMeters = 15,
+): number | undefined {
+  const from = routeCoordinates[index];
+  if (!from) return undefined;
+
+  for (let i = index + 1; i < routeCoordinates.length; i += 1) {
+    if (distanceMeters(from, routeCoordinates[i]) >= lookAheadMeters) {
+      return bearingBetween(from, routeCoordinates[i]);
+    }
+  }
+
+  const last = routeCoordinates[routeCoordinates.length - 1];
+  return last === from ? undefined : bearingBetween(from, last);
 }
 
 // Decodes a Google Maps encoded polyline string into a list of coordinates.

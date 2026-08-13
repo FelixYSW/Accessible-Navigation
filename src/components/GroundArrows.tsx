@@ -61,23 +61,39 @@ const NEAR_OPACITY = 0.95;
 const FAR_OPACITY = 0.4;
 
 interface GroundArrowsProps {
-  /** Bearing to the next route point relative to the way the walker faces:
-   *  0 is straight ahead, positive is to the right. Undefined before the first
-   *  fix, when there is nothing to point at. */
-  turnAngle: number | undefined;
-  /** How far ahead that point is, in metres. The path bends where it sits, so
-   *  the bend comes up the run as the walker approaches the corner. */
-  metersToTarget: number | undefined;
+  /** Which way the route goes from where the walker is standing, relative to
+   *  the way they are facing: 0 is straight ahead, positive is to the right.
+   *  The chevrons set off in this direction immediately - it is where the
+   *  route is, not where the phone happens to be pointed. Undefined before the
+   *  first fix, when there is nothing to point at. */
+  bearingToNext: number | undefined;
+  /** How far ahead the next route point is, in metres, and which way the route
+   *  runs after it - so the run bends at the corner rather than at the walker.
+   *  The bend only comes into view as they approach it, since the chevrons
+   *  only reach a few metres out. */
+  metersToNext: number | undefined;
+  bearingAfterNext: number | undefined;
   color: string;
 }
 
-export function GroundArrows({ turnAngle, metersToTarget, color }: GroundArrowsProps) {
+export function GroundArrows({
+  bearingToNext,
+  metersToNext,
+  bearingAfterNext,
+  color,
+}: GroundArrowsProps) {
   const { width, height } = useWindowDimensions();
 
   const chevrons = useMemo(() => {
-    if (turnAngle === undefined) return [];
-    return buildChevrons(turnAngle, metersToTarget ?? 0, width, height);
-  }, [turnAngle, metersToTarget, width, height]);
+    if (bearingToNext === undefined) return [];
+    return buildChevrons(
+      bearingToNext,
+      metersToNext ?? Infinity,
+      bearingAfterNext ?? bearingToNext,
+      width,
+      height,
+    );
+  }, [bearingToNext, metersToNext, bearingAfterNext, width, height]);
 
   if (chevrons.length === 0) return null;
 
@@ -107,12 +123,17 @@ interface PathPose {
 }
 
 function buildChevrons(
-  turnAngleDegrees: number,
-  metersToTarget: number,
+  bearingToNextDegrees: number,
+  metersToNext: number,
+  bearingAfterNextDegrees: number,
   width: number,
   height: number,
 ): { points: string; opacity: number }[] {
-  const poses = walkPath(toRadians(turnAngleDegrees), metersToTarget);
+  const poses = walkPath(
+    toRadians(bearingToNextDegrees),
+    metersToNext,
+    toRadians(bearingAfterNextDegrees),
+  );
   // Focal length in pixels, from the field of view the preview is showing.
   const focal = width / 2 / Math.tan(toRadians(CAMERA_FOV_DEG) / 2);
   const pitch = toRadians(CAMERA_PITCH_DEG);
@@ -145,10 +166,10 @@ function buildChevrons(
 // The path ahead, sampled at each chevron's distance.
 //
 // Walked out step by step rather than solved in closed form, because the
-// heading changes along the way: it eases from straight ahead into the turn
-// across `BEND_METERS`, and each step's position depends on where the previous
-// one ended up.
-function walkPath(turnAngle: number, turnAt: number): PathPose[] {
+// heading changes along the way: it starts off aimed at the next route point,
+// eases into the onward direction across `BEND_METERS` around that point, and
+// each step's position depends on where the previous one ended up.
+function walkPath(bearingToNext: number, turnAt: number, bearingAfterNext: number): PathPose[] {
   const sampled: PathPose[] = [];
   const furthest = ARROW_DISTANCES_M[ARROW_DISTANCES_M.length - 1];
   let next = 0;
@@ -157,7 +178,15 @@ function walkPath(turnAngle: number, turnAt: number): PathPose[] {
   let z = 0;
 
   for (let travelled = 0; travelled <= furthest + PATH_STEP_M; travelled += PATH_STEP_M) {
-    const heading = turnAngle * bendProgress(travelled, turnAt);
+    // Interpolated between the two legs rather than multiplied up from zero:
+    // leg one is already off at an angle if the walker isn't facing along the
+    // route, and starting the run straight ahead of the camera would point
+    // them down whatever they happen to be facing instead of down the route.
+    const heading = interpolateAngle(
+      bearingToNext,
+      bearingAfterNext,
+      bendProgress(travelled, turnAt),
+    );
 
     while (next < ARROW_DISTANCES_M.length && travelled >= ARROW_DISTANCES_M[next]) {
       sampled.push({ x, z, heading });
@@ -175,6 +204,15 @@ function walkPath(turnAngle: number, turnAt: number): PathPose[] {
 // How far into the turn the path is at a given distance: 0 before the bend
 // starts, 1 once it is complete, smoothly in between so the chevrons swing
 // round rather than snapping to the new heading.
+// Blends two headings the short way round, so a bend from +170deg to -170deg
+// swings 20deg through the back rather than 340deg through the front.
+function interpolateAngle(from: number, to: number, progress: number): number {
+  let delta = (to - from) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return from + delta * progress;
+}
+
 function bendProgress(travelled: number, turnAt: number): number {
   const t = (travelled - (turnAt - BEND_METERS / 2)) / BEND_METERS;
   if (t <= 0) return 0;

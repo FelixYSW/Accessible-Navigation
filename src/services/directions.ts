@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { decodePolyline } from '../utils/geo';
-import type { LatLng, PlaceSuggestion, WalkingRoute } from '../types/route';
+import type { LatLng, PlaceSuggestion, RouteStep, WalkingRoute } from '../types/route';
 
 // How far around the user's current location to bias/limit place
 // suggestions, in meters.
@@ -131,6 +131,48 @@ export async function findPlace(
 // server-side way to request or filter for wheelchair-accessible routes
 // here; every route Google returns for mode=walking is used as-is, unfiltered.
 
+// One step of the API's turn-by-turn directions, in the shape the navigation
+// banner needs.
+function parseStep(step: any): RouteStep {
+  const instruction = stripHtml(step.html_instructions ?? '');
+  return {
+    instruction,
+    road: roadFromInstruction(instruction),
+    maneuver: step.maneuver || undefined,
+    distanceMeters: step.distance?.value ?? 0,
+    start: { latitude: step.start_location.lat, longitude: step.start_location.lng },
+    end: { latitude: step.end_location.lat, longitude: step.end_location.lng },
+  };
+}
+
+// `html_instructions` is markup ("Turn <b>left</b> onto <b>Jalan Tun
+// Razak</b>"), sometimes with a <div> carrying a secondary note. The tags are
+// dropped and the div is turned into a sentence break so the two don't run
+// into each other as one word.
+function stripHtml(html: string): string {
+  return html
+    .replace(/<div[^>]*>/gi, '. ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// The road a step runs along. Google phrases walking instructions as "Turn
+// left onto X", "Continue onto X", "Head north on X" - so the road is whatever
+// follows the last "onto" or " on ". Anything else ("Head north", "Destination
+// will be on the right") names no road, and the banner falls back to the
+// instruction itself rather than showing a fragment of one.
+function roadFromInstruction(instruction: string): string | undefined {
+  const match = instruction.match(/\b(?:onto|on)\s+(.+?)(?:\.|,|$)/i);
+  const road = match?.[1]?.trim();
+  if (!road) return undefined;
+  // "on the right"/"on your left" are directions, not roads.
+  if (/^(the|your)\b/i.test(road)) return undefined;
+  return road;
+}
+
 // Fetches every walking route Google offers between two points (not just
 // the fastest) so the user can preview and pick between them, sorted
 // fastest-first.
@@ -169,6 +211,7 @@ export async function getWalkingRoutes(
       destinationName,
       destinationAddress,
       coordinates,
+      steps: leg.steps.map(parseStep),
       distanceMeters: leg.distance.value,
       durationSeconds: leg.duration.value,
       summary: route.summary || undefined,

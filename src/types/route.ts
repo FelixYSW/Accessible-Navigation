@@ -3,11 +3,32 @@ export interface LatLng {
   longitude: number;
 }
 
+// One leg of the turn-by-turn directions: walk along this, then make the
+// manoeuvre named at the *start* of the next step. That is how the Directions
+// API models it - `maneuver` describes how you get onto the step it sits on,
+// not how you leave it.
+export interface RouteStep {
+  /** Plain-text form of the API's `html_instructions`, e.g. "Turn left onto
+   *  Jalan Tun Razak". */
+  instruction: string;
+  /** The road this step runs along, pulled out of the instruction. Absent when
+   *  the instruction names no road ("Head north"). */
+  road?: string;
+  /** The API's manoeuvre code ("turn-left", "roundabout-right", ...). Absent
+   *  on the first step and on straight continuations. */
+  maneuver?: string;
+  distanceMeters: number;
+  start: LatLng;
+  end: LatLng;
+}
+
 export interface WalkingRoute {
   origin: LatLng;
   destination: LatLng;
   destinationName: string;
   coordinates: LatLng[];
+  /** Turn-by-turn steps, in order, for the navigation banner. */
+  steps: RouteStep[];
   distanceMeters: number;
   durationSeconds: number;
   // Short label for the streets the route mostly follows (e.g. "Jalan

@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import type { LatLng, WalkingRoute } from '../types/route';
+import type { LatLng, RouteStep, WalkingRoute } from '../types/route';
 import type { MobilityAid } from './mobility';
 
 // Accessibility-aware routing via OpenRouteService, which plans over
@@ -149,7 +149,11 @@ export async function findAccessibleRoute(
           [origin.longitude, origin.latitude],
           [destination.longitude, destination.latitude],
         ],
-        instructions: false,
+        // Asked for because the AR navigation banner names the street you are
+        // on and the one you are turning into. Costs a little response size on
+        // a request that is already slow; without it ORS returns geometry
+        // only and an accessible route would navigate with no street names.
+        instructions: true,
         options: {
           ...(avoidSteps ? { avoid_features: ['steps'] } : {}),
           profile_params: { restrictions },
@@ -185,6 +189,12 @@ export async function findAccessibleRoute(
       destinationName,
       destinationAddress,
       coordinates,
+      // ORS words its steps differently from Google's and indexes them into
+      // the coordinate array rather than carrying their own geometry, so they
+      // are mapped here instead of being left empty - a wheelchair user
+      // following the accessible route should get the same street-by-street
+      // banner as everyone else, not a blank one.
+      steps: parseSteps(feature.properties?.segments, coordinates),
       distanceMeters: feature.properties?.summary?.distance ?? 0,
       durationSeconds: feature.properties?.summary?.duration ?? 0,
       accessibleFor: aid,
@@ -192,4 +202,37 @@ export async function findAccessibleRoute(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// ORS's turn-by-turn steps, mapped onto the same `RouteStep` shape Google's
+// are. Two differences it has to bridge: the road name arrives as its own
+// field (as "-" when the way is unnamed) rather than being buried in the
+// instruction text, and each step points at the shared coordinate array by
+// index instead of carrying its own start and end.
+//
+// `maneuver` is deliberately left unset. ORS reports the manoeuvre as a
+// numeric type code from a different vocabulary to Google's, and a wrong
+// mapping would put a left-turn arrow on a right turn - worse than the banner
+// falling back to the bearing it computes itself.
+function parseSteps(segments: any, coordinates: LatLng[]): RouteStep[] {
+  if (!Array.isArray(segments)) return [];
+
+  return segments.flatMap((segment: any) =>
+    (segment?.steps ?? []).map((step: any): RouteStep => {
+      const [startIndex, endIndex] = step.way_points ?? [0, 0];
+      const road = typeof step.name === 'string' && step.name !== '-' ? step.name : undefined;
+      return {
+        instruction: step.instruction ?? '',
+        road,
+        distanceMeters: step.distance ?? 0,
+        start: coordinates[clampIndex(startIndex, coordinates)],
+        end: coordinates[clampIndex(endIndex, coordinates)],
+      };
+    }),
+  );
+}
+
+function clampIndex(index: number, coordinates: LatLng[]): number {
+  if (!Number.isFinite(index)) return 0;
+  return Math.min(Math.max(0, Math.trunc(index)), coordinates.length - 1);
 }

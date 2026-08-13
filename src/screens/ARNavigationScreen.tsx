@@ -1,16 +1,28 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
 import * as Location from 'expo-location';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import type { LatLng } from '../types/route';
+import type { LatLng, RouteStep, WalkingRoute } from '../types/route';
 import { HAZARD_CLASSES } from '../types/hazard';
-import { bearingBetween, distanceMeters, nextRoutePoint, relativeBearing } from '../utils/geo';
+import {
+  bearingBetween,
+  distanceMeters,
+  nextRoutePointIndex,
+  relativeBearing,
+  routeBearingAfter,
+} from '../utils/geo';
 import { useStubHazardDetector } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
 import { GroundArrows } from '../components/GroundArrows';
+import {
+  MANEUVER_ICONS,
+  MANEUVER_LABELS,
+  maneuverFromAngle,
+  maneuverFromApi,
+  type Maneuver,
+} from '../components/maneuverIcons';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { VoiceCuePill } from '../components/VoiceCuePill';
 import { useSettings } from '../theme/SettingsContext';
@@ -19,10 +31,6 @@ import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { formatDistance, formatDuration } from '../utils/format';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ARNavigation'>;
-
-// Turns sharper than this are called out as a turn; anything straighter reads
-// as "Continue straight".
-const TURN_THRESHOLD_DEGREES = 25;
 
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
@@ -58,10 +66,70 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     };
   }, []);
 
-  const target = position ? nextRoutePoint(walkingRoute.coordinates, position) : undefined;
-  const turnAngle =
+  // Two directions matter, not one: the way the route runs from here to the
+  // next point, and the way it runs after that point. The first is where the
+  // walker should be heading right now; the second is the turn they are being
+  // warned about. Both are expressed relative to the way they are facing, so
+  // they can be drawn straight onto the camera.
+  const targetIndex =
+    position !== null ? nextRoutePointIndex(walkingRoute.coordinates, position) : undefined;
+  const target = targetIndex !== undefined ? walkingRoute.coordinates[targetIndex] : undefined;
+
+  const bearingToNext =
     position && target ? relativeBearing(heading, bearingBetween(position, target)) : undefined;
+  const onwardBearing =
+    targetIndex !== undefined
+      ? routeBearingAfter(walkingRoute.coordinates, targetIndex)
+      : undefined;
+  const bearingAfterNext =
+    onwardBearing !== undefined ? relativeBearing(heading, onwardBearing) : undefined;
   const metersToTarget = position && target ? distanceMeters(position, target) : undefined;
+
+  // The change of direction *across* the next point - not where that point
+  // happens to lie relative to the walker's shoulders. `relativeBearing(a, b)`
+  // is b - a, so this is (direction after) minus (direction before): positive
+  // means the route swings right.
+  const vertexTurn =
+    bearingToNext !== undefined && bearingAfterNext !== undefined
+      ? relativeBearing(bearingToNext, bearingAfterNext)
+      : bearingToNext;
+
+  // The banner works in steps, not polyline vertices. Vertices sit a few
+  // metres apart, so a banner counting down to one would read "12 m" forever;
+  // what a walker wants is the distance to the actual manoeuvre and the name
+  // of the street it puts them on.
+  const stepIndex = position ? currentStepIndex(walkingRoute, position) : undefined;
+  const step = stepIndex !== undefined ? walkingRoute.steps[stepIndex] : undefined;
+  const nextStep = stepIndex !== undefined ? walkingRoute.steps[stepIndex + 1] : undefined;
+
+  const metersToManeuver =
+    position && step ? distanceMeters(position, step.end) : metersToTarget;
+
+  // Measured between the two legs' own end-to-end directions, so it describes
+  // the manoeuvre the distance above is counting down to, rather than whatever
+  // slight bend the nearest vertex happens to sit on.
+  const stepTurn =
+    step && nextStep
+      ? relativeBearing(
+          bearingBetween(step.start, step.end),
+          bearingBetween(nextStep.start, nextStep.end),
+        )
+      : undefined;
+
+  const turnAngle = stepTurn ?? vertexTurn;
+
+  // Which of the fixed banner glyphs to show. The API's own code wins where
+  // there is one; the measured angle covers routes without them; and once
+  // there is no step left to turn into, the manoeuvre is arriving.
+  const maneuver: Maneuver =
+    step && !nextStep
+      ? 'arrive'
+      : (maneuverFromApi(nextStep?.maneuver) ?? maneuverFromAngle(turnAngle));
+  const ManeuverIcon = MANEUVER_ICONS[maneuver];
+  // The road being turned onto, which is the one worth naming while
+  // approaching a corner. Falls back to the road underfoot on the last leg,
+  // where there is nothing left to turn onto.
+  const road = nextStep?.road ?? step?.road;
 
   const progress = useTripProgress(walkingRoute, position);
   const remainingMeters = walkingRoute.distanceMeters * (1 - progress);
@@ -81,7 +149,12 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     <CameraStage isActive>
       {/* Under the hazard overlay: a hazard on the path is the more urgent of
           the two, and must never end up behind a chevron pointing at it. */}
-      <GroundArrows turnAngle={turnAngle} metersToTarget={metersToTarget} color={T.green} />
+      <GroundArrows
+        bearingToNext={bearingToNext}
+        metersToNext={metersToTarget}
+        bearingAfterNext={bearingAfterNext}
+        color={T.green}
+      />
 
       <HazardOverlay detections={detections} />
 
@@ -93,19 +166,23 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         <VoiceCuePill cue="hazards" />
       </View>
 
-      {/* The instruction reads as one line across the top, the way it does on
-          a driving screen: the arrow says which way, the words say the same
-          thing again for anyone who can't read a small rotated glyph, and the
-          distance says when. */}
+      {/* Laid out the way a turn-by-turn banner is: the manoeuvre arrow, then
+          the distance to it as the headline - that is the thing being read at
+          a glance while walking - then the street it puts you on, then what
+          that street heads towards. The instruction in words comes last, for
+          anyone who can't read a small rotated glyph. */}
       <View style={[styles.banner, { top: insets.top + 60 }]}>
-        <TurnArrow color={T.green} angle={turnAngle ?? 0} width={scaled(44)} />
+        <ManeuverIcon size={scaled(46)} color="#fff" strokeWidth={2.2} />
         <View style={styles.bannerText}>
-          <Text style={[styles.turnInstruction, { fontSize: F.h2 }]} numberOfLines={1}>
-            {describeTurn(turnAngle)}
+          <Text style={[styles.bannerDistance, { fontSize: F.h1 }]} numberOfLines={1}>
+            {metersToManeuver !== undefined ? formatDistance(metersToManeuver) : '—'}
           </Text>
-          {metersToTarget !== undefined && (
-            <Text style={[styles.turnDistance, { fontSize: F.sm }]} numberOfLines={1}>
-              in {formatDistance(metersToTarget)}
+          <Text style={[styles.bannerRoad, { fontSize: F.h2 }]} numberOfLines={1}>
+            {road ?? MANEUVER_LABELS[maneuver]}
+          </Text>
+          {road && (
+            <Text style={[styles.bannerToward, { fontSize: F.sm }]} numberOfLines={1}>
+              {MANEUVER_LABELS[maneuver]}
             </Text>
           )}
         </View>
@@ -180,35 +257,39 @@ function useTripProgress(
   }, [walkingRoute, position]);
 }
 
-function describeTurn(angle: number | undefined): string {
-  if (angle === undefined) return 'Getting your position';
-  if (Math.abs(angle) <= TURN_THRESHOLD_DEGREES) return 'Continue straight';
-  if (Math.abs(angle) >= 135) return 'Turn around';
-  return angle > 0 ? 'Turn right' : 'Turn left';
-}
+// Which step of the directions the walker is currently on - the leg whose end
+// they are walking towards.
+//
+// Chosen by how far off each step's span they are, rather than by nearest
+// endpoint: a step is a stretch of road, and someone standing in the middle of
+// a long one is far from both of its ends. Walking to the start and then to
+// the end of the step you are on covers the step's own length and no more, so
+// the excess over that length is zero on the right step and grows with
+// distance on every other one.
+//
+// Undefined when the route carries no steps at all, which is what the banner
+// falls back to plain turn wording for.
+function currentStepIndex(walkingRoute: WalkingRoute, position: LatLng): number | undefined {
+  const { steps } = walkingRoute;
+  if (!steps || steps.length === 0) return undefined;
 
-// The design's chevron: two strokes meeting at a point, rotated to indicate
-// which way to go (0 = straight ahead, positive = right). Sized from the
-// outside so it grows with the instruction underneath it - it is the largest
-// thing on the screen and the last one that should stay small.
-function TurnArrow({ color, angle, width }: { color: string; angle: number; width: number }) {
-  return (
-    <Svg
-      width={width}
-      height={Math.round((width * 34) / 40)}
-      viewBox="0 0 72 60"
-      style={{ transform: [{ rotate: `${angle}deg` }] }}
-    >
-      <Path
-        d="M36 4 L14 46 M36 4 L58 46"
-        stroke={color}
-        strokeWidth={7}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-    </Svg>
-  );
+  let best = 0;
+  let bestExcess = Infinity;
+
+  steps.forEach((step: RouteStep, index: number) => {
+    const excess = Math.max(
+      0,
+      distanceMeters(position, step.start) +
+        distanceMeters(position, step.end) -
+        step.distanceMeters,
+    );
+    if (excess < bestExcess) {
+      bestExcess = excess;
+      best = index;
+    }
+  });
+
+  return best;
 }
 
 const styles = StyleSheet.create({
@@ -234,8 +315,9 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   bannerText: { flex: 1 },
-  turnInstruction: { color: '#fff', fontWeight: '700' },
-  turnDistance: { color: 'rgba(255,255,255,0.65)', marginTop: 2 },
+  bannerDistance: { color: '#fff', fontWeight: '700' },
+  bannerRoad: { color: '#fff', fontWeight: '600', marginTop: 1 },
+  bannerToward: { color: 'rgba(255,255,255,0.6)', marginTop: 3 },
   sheet: {
     position: 'absolute',
     left: SCREEN_MARGIN,
