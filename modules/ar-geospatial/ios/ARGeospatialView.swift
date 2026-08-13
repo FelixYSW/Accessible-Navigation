@@ -1,4 +1,11 @@
-import ARCore
+// ARCore's iOS SDK has no umbrella Swift module: it ships one XCFramework per
+// subspec (ARCoreBase, ARCoreGARSession, ARCoreGeospatial), and each is its
+// own module. `import ARCore` matches the pod name, not a module, and does not
+// resolve - the session types live in ARCoreGARSession and everything
+// geospatial, including the pose and the VPS check, in ARCoreGeospatial.
+import ARCoreBase
+import ARCoreGARSession
+import ARCoreGeospatial
 import ARKit
 import ExpoModulesCore
 

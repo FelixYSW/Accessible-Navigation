@@ -27,5 +27,13 @@ Pod::Spec.new do |s|
     'SWIFT_COMPILATION_MODE' => 'wholemodule',
   }
 
+  # ARCore's frameworks carry Objective-C categories, and the linker drops
+  # those from a static library unless it is told to load every object file.
+  # Google's setup guide calls this out as a requirement; without it the build
+  # links but the SDK fails at runtime with unrecognised selectors.
+  s.user_target_xcconfig = {
+    'OTHER_LDFLAGS' => '$(inherited) -ObjC',
+  }
+
   s.source_files = '**/*.{h,m,mm,swift,hpp,cpp}'
 end
