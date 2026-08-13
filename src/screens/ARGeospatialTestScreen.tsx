@@ -42,6 +42,9 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
   const [origin, setOrigin] = useState<{ latitude: number; longitude: number } | null>(null);
   const [update, setUpdate] = useState<GeospatialUpdate | null>(null);
   const [anchors, setAnchors] = useState<ProjectedAnchor[]>([]);
+  const [plantedAnchors, setPlantedAnchors] = useState<
+    { latitude: number; longitude: number }[]
+  >([]);
 
   const apiKey = (Constants.expoConfig?.extra?.googleMapsApiKey as string | undefined) ?? '';
 
@@ -67,7 +70,16 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
     };
   }, []);
 
-  const testAnchors = origin ? anchorsAhead(origin, update?.heading ?? 0) : [];
+  // Planted exactly once, the first moment there is both a fix to place them
+  // from and a heading to lay them out along. Holding them in state rather than
+  // recomputing per render is the whole point: these anchors are the thing
+  // under test, so if they were rebuilt from the current heading they would
+  // follow the phone around and hold still no matter how good or bad the
+  // localisation was.
+  useEffect(() => {
+    if (plantedAnchors.length > 0 || !origin || !update?.tracking) return;
+    setPlantedAnchors(anchorsAhead(origin, update.heading));
+  }, [origin, update, plantedAnchors.length]);
 
   const localised =
     update?.tracking === true &&
@@ -90,7 +102,7 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
       <ARGeospatialView
         style={StyleSheet.absoluteFill}
         apiKey={apiKey}
-        anchors={testAnchors}
+        anchors={plantedAnchors}
         onGeospatialUpdate={(event) => setUpdate(event.nativeEvent)}
         onAnchorsUpdate={(event) => setAnchors(event.nativeEvent.anchors)}
       />
@@ -156,7 +168,11 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
             />
             <Row
               label="Geospatial (green)"
-              value={`${countVisible(anchors, 'geospatial')} of ${testAnchors.length} in view`}
+              value={
+                plantedAnchors.length === 0
+                  ? 'not planted yet'
+                  : `${countVisible(anchors, 'geospatial')} of ${plantedAnchors.length} in view`
+              }
               fontSize={F.sm}
             />
           </>
