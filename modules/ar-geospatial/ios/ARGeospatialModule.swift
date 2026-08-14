@@ -14,9 +14,16 @@ public class ARGeospatialModule: Module {
         view.setApiKey(key)
       }
 
-      // The route points to anchor, nearest first.
+      // The route points to anchor, in route order, each with an id that is
+      // stable for as long as that point is wanted.
       Prop("anchors") { (view: ARGeospatialView, anchors: [GeoAnchorRecord]) in
         view.setAnchors(anchors)
+      }
+
+      // Plain ARKit anchors planted straight ahead, for the Geospatial test
+      // screen to judge the tracking against. Off on a real route.
+      Prop("showControlAnchors") { (view: ARGeospatialView, show: Bool) in
+        view.setShowControlAnchors(show)
       }
     }
   }

@@ -10,9 +10,40 @@ import ARKit
 import ExpoModulesCore
 
 /// A route point to plant an anchor on.
+///
+/// The id is what makes an anchor stable. Anchors are the one thing on this
+/// screen that must not move once placed, so they are matched by id rather than
+/// by list position: as the walker advances, points fall off the back of the
+/// list and new ones appear at the front, and everything still in the middle
+/// keeps its id and therefore keeps its anchor. Diffing by position instead
+/// would destroy and recreate the lot on every location fix, and re-created
+/// anchors jump.
 struct GeoAnchorRecord: Record {
+  @Field var id: Int = 0
   @Field var latitude: Double = 0
   @Field var longitude: Double = 0
+}
+
+/// The chevron painted on the ground at each anchored route point, and the
+/// assumption about how high the phone is held.
+///
+/// The shape is built and projected here rather than drawn as a scaled sprite
+/// in JS, because a flat marker lying on the pavement is foreshortened - it
+/// gets shallower as well as smaller with distance, and its far edge shrinks
+/// faster than its near one. Projecting the actual corners through the ARKit
+/// camera gets that for free and gets it exactly right, including as the phone
+/// is tilted, which is the difference between paint on the road and a sticker
+/// on the lens.
+enum GroundChevron {
+  /// Roughly how far below the phone the pavement is, used to drop the anchors
+  /// from the reported camera altitude onto the ground.
+  static let cameraHeightM: Double = 1.4
+
+  /// One chevron in its own frame, in metres: x across the path, y along it.
+  /// A metre wide, so it reads at walking scale.
+  static let outline: [(across: Float, ahead: Float)] = [
+    (0, 0.4), (0.5, -0.16), (0.5, -0.4), (0, 0.16), (-0.5, -0.4), (-0.5, -0.16),
+  ]
 }
 
 /// An ARKit camera preview whose frames are also fed to ARCore's Geospatial
@@ -40,10 +71,16 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   private var apiKey: String?
 
   /// Route points waiting for Earth to start tracking, and the anchors made
-  /// from them once it has.
-  private var requestedAnchors: [CLLocationCoordinate2D] = []
-  private var placedAnchors: [GARAnchor] = []
+  /// from them once it has, kept by id so the two can be reconciled without
+  /// disturbing anchors that are already down.
+  private var requestedAnchors: [(id: Int, coordinate: CLLocationCoordinate2D)] = []
+  private var placedAnchors: [Int: GARAnchor] = [:]
   private var anchorsAreStale = false
+
+  /// Whether to plant the plain ARKit control anchors. Only the Geospatial test
+  /// screen wants them; on a real route they would be three stray marks on the
+  /// floor with no meaning.
+  private var showControlAnchors = false
 
   /// Plain ARKit anchors, planted straight ahead on the floor as soon as the
   /// camera is tracking and independent of anything geospatial.
@@ -101,9 +138,13 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func setAnchors(_ anchors: [GeoAnchorRecord]) {
     requestedAnchors = anchors.map {
-      CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+      (id: $0.id, coordinate: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude))
     }
     anchorsAreStale = true
+  }
+
+  func setShowControlAnchors(_ show: Bool) {
+    showControlAnchors = show
   }
 
   // MARK: - ARKit
@@ -125,7 +166,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     guard let garSession else {
       // No ARCore session yet - the local anchors are still worth drawing, so
       // the tracking can be judged on its own.
-      emitAnchors(garFrame: nil, arFrame: frame)
+      emitAnchors(arFrame: frame)
       return
     }
 
@@ -153,9 +194,9 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
     if let transform {
       requestVpsAvailabilityOnce(at: transform.coordinate)
-      rebuildAnchorsIfNeeded(cameraAltitude: transform.altitude)
+      syncAnchorsIfNeeded(cameraAltitude: transform.altitude)
     }
-    emitAnchors(garFrame: garFrame, arFrame: arFrame)
+    emitAnchors(arFrame: arFrame)
 
     // Throttled: ARKit runs at 60Hz, and the numbers on screen are read by a
     // human standing still. Anchor positions are sent every frame; only this
@@ -181,29 +222,34 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   /// Anchors are planted a fixed drop below the camera rather than on a terrain
   /// anchor, which would need its own round trip to Google's elevation data and
-  /// only works where that data exists. A metre and a half under the phone is
-  /// the pavement, near enough, and it works with no coverage at all.
-  private func rebuildAnchorsIfNeeded(cameraAltitude: CLLocationDistance) {
+  /// only works where that data exists. Roughly a phone's carrying height under
+  /// the camera is the pavement, near enough, and it needs no coverage at all.
+  private func syncAnchorsIfNeeded(cameraAltitude: CLLocationDistance) {
     guard anchorsAreStale, let garSession else { return }
     anchorsAreStale = false
 
-    for anchor in placedAnchors {
-      garSession.remove(anchor)
+    // Only the difference is applied. An anchor that is still wanted is left
+    // exactly as it is - not removed and re-made at the same coordinate, which
+    // would look identical in the code and visibly twitch on screen, since a
+    // fresh anchor is re-resolved against the current pose.
+    let wanted = Set(requestedAnchors.map(\.id))
+    for id in placedAnchors.keys.filter({ !wanted.contains($0) }) {
+      if let anchor = placedAnchors.removeValue(forKey: id) {
+        garSession.remove(anchor)
+      }
     }
-    placedAnchors = []
 
     // Identity: the anchor is a point on the route, so which way it "faces"
     // carries no meaning - the direction is drawn from the run of them.
     let orientation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
 
-    for coordinate in requestedAnchors {
+    for request in requestedAnchors where placedAnchors[request.id] == nil {
       do {
-        let anchor = try garSession.createAnchor(
-          coordinate: coordinate,
-          altitude: cameraAltitude - 1.5,
+        placedAnchors[request.id] = try garSession.createAnchor(
+          coordinate: request.coordinate,
+          altitude: cameraAltitude - GroundChevron.cameraHeightM,
           eastUpSouthQAnchor: orientation
         )
-        placedAnchors.append(anchor)
       } catch {
         report(failure: "Could not anchor a route point: \(error.localizedDescription)")
       }
@@ -214,7 +260,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// trust a position. They go on the floor - a fixed drop below the camera -
   /// straight ahead of wherever the phone is pointing.
   private func placeLocalAnchorsIfNeeded(frame: ARFrame) {
-    guard localAnchors.isEmpty else { return }
+    guard showControlAnchors, localAnchors.isEmpty else { return }
     guard case .normal = frame.camera.trackingState else { return }
 
     let camera = frame.camera.transform
@@ -230,7 +276,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     for distance in Self.testDistancesM {
       var transform = matrix_identity_float4x4
       transform.columns.3 = simd_float4(
-        eye + direction * Float(distance) - simd_float3(0, 1.5, 0),
+        eye + direction * Float(distance) - simd_float3(0, Float(GroundChevron.cameraHeightM), 0),
         1
       )
       let anchor = ARAnchor(name: "control-\(distance)", transform: transform)
@@ -243,7 +289,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// on. Both kinds go in the same event so the two can be compared directly:
   /// if the control anchors hold and the geospatial ones wander, the problem is
   /// the localisation rather than the tracking.
-  private func emitAnchors(garFrame: GARFrame?, arFrame: ARFrame) {
+  private func emitAnchors(arFrame: ARFrame) {
     let viewport = bounds.size
     guard viewport.width > 0, viewport.height > 0 else { return }
 
@@ -251,31 +297,107 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
     for (index, anchor) in localAnchors.enumerated() {
       projected.append(
-        project(transform: anchor.transform, index: index, kind: "local", arFrame: arFrame, viewport: viewport)
+        project(
+          position: origin(of: anchor.transform),
+          index: index,
+          kind: "local",
+          forward: nil,
+          arFrame: arFrame,
+          viewport: viewport
+        )
       )
     }
 
-    if let garFrame {
-      for (index, anchor) in garFrame.anchors.enumerated() where anchor.hasValidTransform {
-        projected.append(
-          project(transform: anchor.transform, index: index, kind: "geospatial", arFrame: arFrame, viewport: viewport)
+    // Route order matters here in a way it did not for the control anchors:
+    // each chevron is turned to face the next point along, so the run of them
+    // follows the pavement round a corner.
+    let route = requestedAnchors.compactMap { request -> (id: Int, position: simd_float3)? in
+      guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { return nil }
+      return (id: request.id, position: origin(of: anchor.transform))
+    }
+
+    var forwards: [simd_float3] = []
+    for index in route.indices {
+      let toNext = index + 1 < route.count
+        ? flattened(route[index + 1].position - route[index].position)
+        : nil
+      // The last point has nothing to aim at, so it keeps the direction of the
+      // leg that reached it; a repeated coordinate does the same rather than
+      // collapsing to a zero-length arrow.
+      forwards.append(toNext ?? forwards.last ?? cameraForward(arFrame))
+    }
+
+    for (index, point) in route.enumerated() {
+      projected.append(
+        project(
+          position: point.position,
+          index: point.id,
+          kind: "geospatial",
+          forward: forwards[index],
+          arFrame: arFrame,
+          viewport: viewport
         )
-      }
+      )
     }
 
     onAnchorsUpdate(["anchors": projected])
   }
 
+  /// One anchor, as the JS layer needs it: where its centre lands on screen,
+  /// and - when it is a route point - the six screen corners of the chevron
+  /// lying flat on the ground there.
   private func project(
-    transform: simd_float4x4,
+    position: simd_float3,
     index: Int,
     kind: String,
+    forward: simd_float3?,
     arFrame: ARFrame,
     viewport: CGSize
   ) -> [String: Any] {
-    let world = transform.columns.3
-    let position = simd_float3(world.x, world.y, world.z)
+    let centre = screenPoint(of: position, arFrame: arFrame, viewport: viewport)
 
+    var payload: [String: Any] = [
+      "index": index,
+      "kind": kind,
+      "x": centre.point.x,
+      "y": centre.point.y,
+      "distance": Double(centre.distance),
+      "visible": centre.inFront,
+    ]
+
+    if let forward, centre.inFront {
+      // Right-handed world with +Y up, so forward x up points to the walker's
+      // right - the axis the chevron's width runs along.
+      let right = simd_cross(forward, simd_float3(0, 1, 0))
+      var outline: [Double] = []
+      var wholeShapeInFront = true
+
+      for corner in GroundChevron.outline {
+        let world = position + right * corner.across + forward * corner.ahead
+        let projectedCorner = screenPoint(of: world, arFrame: arFrame, viewport: viewport)
+        // One corner behind the lens takes the whole chevron with it: a partly
+        // projected polygon is not a smaller chevron, it is a torn one.
+        if !projectedCorner.inFront {
+          wholeShapeInFront = false
+          break
+        }
+        outline.append(Double(projectedCorner.point.x))
+        outline.append(Double(projectedCorner.point.y))
+      }
+
+      if wholeShapeInFront {
+        payload["outline"] = outline
+      }
+    }
+
+    return payload
+  }
+
+  private func screenPoint(
+    of position: simd_float3,
+    arFrame: ARFrame,
+    viewport: CGSize
+  ) -> (point: CGPoint, distance: Float, inFront: Bool) {
     // Anything behind the lens projects onto the screen as readily as anything
     // in front of it, so being in front has to be checked separately: in
     // camera space the view looks down -Z.
@@ -286,16 +408,29 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       viewportSize: viewport
     )
 
-    return [
-      "index": index,
-      "kind": kind,
-      "x": point.x,
-      "y": point.y,
-      "distance": Double(
-        simd_length(simd_float3(inCameraSpace.x, inCameraSpace.y, inCameraSpace.z))
-      ),
-      "visible": inCameraSpace.z < 0,
-    ]
+    return (
+      point: point,
+      distance: simd_length(simd_float3(inCameraSpace.x, inCameraSpace.y, inCameraSpace.z)),
+      inFront: inCameraSpace.z < 0
+    )
+  }
+
+  private func origin(of transform: simd_float4x4) -> simd_float3 {
+    simd_float3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+  }
+
+  /// A direction flattened onto the horizontal plane and normalised, or nil if
+  /// there is nothing left of it once the vertical part is dropped.
+  private func flattened(_ vector: simd_float3) -> simd_float3? {
+    let level = simd_float3(vector.x, 0, vector.z)
+    guard simd_length(level) > 0.001 else { return nil }
+    return simd_normalize(level)
+  }
+
+  private func cameraForward(_ arFrame: ARFrame) -> simd_float3 {
+    let transform = arFrame.camera.transform
+    let lookingAt = simd_float3(-transform.columns.2.x, 0, -transform.columns.2.z)
+    return flattened(lookingAt) ?? simd_float3(0, 0, -1)
   }
 
   /// Asked once, as soon as there is a location to ask about. The answer is

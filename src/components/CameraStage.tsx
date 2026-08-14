@@ -14,6 +14,15 @@ interface CameraStageProps {
   /** Whether the camera session should be streaming. Screens pass `false`
    *  when they are not the focused tab, so the camera is released. */
   isActive: boolean;
+  /** What runs the camera behind the overlays. Defaults to the plain
+   *  vision-camera preview, which is what Hazard Detection wants.
+   *
+   *  AR Navigation passes an ARKit session instead, because only one thing can
+   *  hold the camera at a time and its arrows need the pose that session
+   *  provides. Everything around it - the permission gate, the dark surface,
+   *  the forced-light status bar - is identical either way, which is the reason
+   *  this stays one component rather than two that drift apart. */
+  surface?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -21,7 +30,7 @@ interface CameraStageProps {
 // the live camera view and the dark surface behind the overlays. Both screens
 // present identical camera chrome, so keeping it here stops the two from
 // drifting apart.
-export function CameraStage({ isActive, children }: CameraStageProps) {
+export function CameraStage({ isActive, surface, children }: CameraStageProps) {
   const { hasPermission, requestPermission } = useCameraPermission();
   const { F } = useTheme();
 
@@ -53,7 +62,7 @@ export function CameraStage({ isActive, children }: CameraStageProps) {
           switches tabs, and a still-mounted StatusBar would keep overriding
           the theme's own setting on whichever screen they moved to. */}
       {isActive && <StatusBar style="light" />}
-      <Camera style={StyleSheet.absoluteFill} isActive={isActive} device="back" />
+      {surface ?? <Camera style={StyleSheet.absoluteFill} isActive={isActive} device="back" />}
       {children}
     </View>
   );

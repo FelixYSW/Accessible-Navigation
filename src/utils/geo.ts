@@ -261,6 +261,86 @@ export function routeBearingAfter(
   return last === from ? undefined : bearingBetween(from, last);
 }
 
+// How far along the route a position falls, in metres from its start.
+//
+// Measured onto the nearest *segment* rather than to the nearest vertex.
+// Vertices sit several metres apart on a straight stretch, so snapping to them
+// would leave this answer unchanged for a dozen paces and then jump - and the
+// AR anchors are spaced off this figure, so a jump would move them.
+export function distanceAlongRoute(coordinates: LatLng[], position: LatLng): number {
+  if (coordinates.length < 2) return 0;
+
+  let travelled = 0;
+  let best = 0;
+  let bestOffset = Infinity;
+
+  for (let i = 1; i < coordinates.length; i += 1) {
+    const segmentLength = distanceMeters(coordinates[i - 1], coordinates[i]);
+    const fraction = fractionAlongSegment(position, coordinates[i - 1], coordinates[i]);
+    const offset = distanceMeters(
+      position,
+      interpolateCoordinate(coordinates[i - 1], coordinates[i], fraction),
+    );
+
+    if (offset < bestOffset) {
+      bestOffset = offset;
+      best = travelled + fraction * segmentLength;
+    }
+    travelled += segmentLength;
+  }
+
+  return best;
+}
+
+// The coordinate a given distance along the route, interpolated within the
+// segment it lands in. Undefined past the end, which is how a caller knows it
+// has run out of route rather than being handed the destination over and over.
+export function pointAtDistanceAlong(
+  coordinates: LatLng[],
+  meters: number,
+): LatLng | undefined {
+  if (coordinates.length === 0) return undefined;
+  if (meters <= 0) return coordinates[0];
+
+  let travelled = 0;
+  for (let i = 1; i < coordinates.length; i += 1) {
+    const segmentLength = distanceMeters(coordinates[i - 1], coordinates[i]);
+    if (travelled + segmentLength >= meters) {
+      const fraction = segmentLength === 0 ? 0 : (meters - travelled) / segmentLength;
+      return interpolateCoordinate(coordinates[i - 1], coordinates[i], fraction);
+    }
+    travelled += segmentLength;
+  }
+
+  return undefined;
+}
+
+// Where the foot of the perpendicular from `position` falls on segment a-b, as
+// a 0-1 fraction of the segment, clamped to its ends.
+//
+// Worked in degrees with longitude squashed by the latitude, which is accurate
+// well past the length of any route segment and avoids a projection: the units
+// cancel in the ratio, so only the shape of the triangle matters.
+function fractionAlongSegment(position: LatLng, a: LatLng, b: LatLng): number {
+  const squash = Math.cos(toRadians(a.latitude));
+  const bx = (b.longitude - a.longitude) * squash;
+  const by = b.latitude - a.latitude;
+  const px = (position.longitude - a.longitude) * squash;
+  const py = position.latitude - a.latitude;
+
+  const lengthSquared = bx * bx + by * by;
+  if (lengthSquared === 0) return 0;
+
+  return Math.min(1, Math.max(0, (px * bx + py * by) / lengthSquared));
+}
+
+function interpolateCoordinate(a: LatLng, b: LatLng, fraction: number): LatLng {
+  return {
+    latitude: a.latitude + (b.latitude - a.latitude) * fraction,
+    longitude: a.longitude + (b.longitude - a.longitude) * fraction,
+  };
+}
+
 // Decodes a Google Maps encoded polyline string into a list of coordinates.
 // https://developers.google.com/maps/documentation/utilities/polylinealgorithm
 export function decodePolyline(encoded: string): LatLng[] {

@@ -8,6 +8,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
 import {
   ARGeospatialView,
+  type GeoAnchor,
   type GeospatialUpdate,
   type ProjectedAnchor,
 } from '../../modules/ar-geospatial';
@@ -42,9 +43,7 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
   const [origin, setOrigin] = useState<{ latitude: number; longitude: number } | null>(null);
   const [update, setUpdate] = useState<GeospatialUpdate | null>(null);
   const [anchors, setAnchors] = useState<ProjectedAnchor[]>([]);
-  const [plantedAnchors, setPlantedAnchors] = useState<
-    { latitude: number; longitude: number }[]
-  >([]);
+  const [plantedAnchors, setPlantedAnchors] = useState<GeoAnchor[]>([]);
 
   const apiKey = (Constants.expoConfig?.extra?.googleMapsApiKey as string | undefined) ?? '';
 
@@ -103,6 +102,7 @@ export function ARGeospatialTestScreen({ navigation }: Props) {
         style={StyleSheet.absoluteFill}
         apiKey={apiKey}
         anchors={plantedAnchors}
+        showControlAnchors
         onGeospatialUpdate={(event) => setUpdate(event.nativeEvent)}
         onAnchorsUpdate={(event) => setAnchors(event.nativeEvent.anchors)}
       />
@@ -209,12 +209,13 @@ function Row({ label, value, fontSize }: { label: string; value: string; fontSiz
 function anchorsAhead(
   origin: { latitude: number; longitude: number },
   headingDegrees: number,
-): { latitude: number; longitude: number }[] {
+): GeoAnchor[] {
   const heading = (headingDegrees * Math.PI) / 180;
   const metresPerDegreeLat = 111320;
   const metresPerDegreeLng = metresPerDegreeLat * Math.cos((origin.latitude * Math.PI) / 180);
 
-  return TEST_ANCHOR_DISTANCES_M.map((distance) => ({
+  return TEST_ANCHOR_DISTANCES_M.map((distance, index) => ({
+    id: index,
     latitude: origin.latitude + (Math.cos(heading) * distance) / metresPerDegreeLat,
     longitude: origin.longitude + (Math.sin(heading) * distance) / metresPerDegreeLng,
   }));

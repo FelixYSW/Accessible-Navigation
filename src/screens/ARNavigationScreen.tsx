@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import { DeviceMotion } from 'expo-sensors';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -9,14 +10,24 @@ import type { LatLng, RouteStep, WalkingRoute } from '../types/route';
 import { HAZARD_CLASSES } from '../types/hazard';
 import {
   bearingBetween,
+  distanceAlongRoute,
   distanceMeters,
   nextRoutePointIndex,
+  pointAtDistanceAlong,
   relativeBearing,
   routeBearingAfter,
 } from '../utils/geo';
+import {
+  ARGeospatialView,
+  isARGeospatialSupported,
+  type GeoAnchor,
+  type GeospatialUpdate,
+  type ProjectedAnchor,
+} from '../../modules/ar-geospatial';
 import { useStubHazardDetector } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
+import { GroundChevrons } from '../components/GroundChevrons';
 import {
   MANEUVER_ICONS,
   MANEUVER_LABELS,
@@ -31,6 +42,9 @@ import { routeDurationSeconds } from '../services/mobility';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { formatDistance, formatDuration } from '../utils/format';
 
+const GOOGLE_MAPS_API_KEY =
+  (Constants.expoConfig?.extra?.googleMapsApiKey as string | undefined) ?? '';
+
 type Props = NativeStackScreenProps<RootStackParamList, 'ARNavigation'>;
 
 // How often the phone's tilt is read, and how much of each reading is taken.
@@ -43,6 +57,36 @@ const PITCH_SMOOTHING = 0.25;
 // Clearance between the safe area and the instruction banner, which is the
 // topmost thing on this screen.
 const BANNER_TOP_GAP = 4;
+
+// Where the anchored chevrons are planted along the route: one every couple of
+// metres, from just in front of the walker out to the far end of what reads on
+// screen. Past that the ground compresses towards the horizon and a chevron
+// projects to a sliver, so anchoring more of them costs tracking work for
+// something nobody can see.
+const ANCHOR_SPACING_M = 2;
+const ANCHOR_LEAD_M = 1.5;
+const ANCHOR_HORIZON_M = 14;
+
+// When the geospatial pose is good enough to plant anchors on. Looser than the
+// test screen's thresholds, because these two readings do different jobs here:
+// once an anchor is down ARKit holds it still regardless, so what the accuracy
+// governs is how truly the run of them lands on the pavement, not whether it
+// stays put. Beyond these the placement is worth less than the compass-drawn
+// fallback, which at least starts from where the walker actually is.
+const TRUST_ANCHORS_ACCURACY_M = 5;
+const TRUST_ANCHORS_HEADING_DEG = 15;
+
+// And when to stop trusting it - deliberately worse than the figures above
+// rather than equal to them.
+//
+// Reported accuracy wanders continuously, so a single threshold would be
+// crossed back and forth while walking, and each crossing swaps the chevrons
+// between two sources that disagree by metres. The walker would read that as
+// the arrows jumping, which is the fault this whole change exists to remove. A
+// gap between switching on and switching off means the pose has to genuinely
+// deteriorate, not merely wobble, before the fallback takes over.
+const DISTRUST_ANCHORS_ACCURACY_M = 9;
+const DISTRUST_ANCHORS_HEADING_DEG = 25;
 
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
@@ -58,6 +102,23 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // The banner's own height, so the pills can sit under it rather than at a
   // guessed offset that a longer street name would push them into.
   const [bannerHeight, setBannerHeight] = useState(0);
+  // What the AR session reports: where on Earth it has placed itself, and
+  // where each anchored route point currently lands on screen.
+  const [geospatial, setGeospatial] = useState<GeospatialUpdate | null>(null);
+  const [projectedAnchors, setProjectedAnchors] = useState<ProjectedAnchor[]>([]);
+
+  // Held steady across renders. The anchor event arrives every camera frame, so
+  // this component re-renders at 60Hz; fresh closures each time would hand the
+  // native view new props sixty times a second for no change in behaviour.
+  const handleGeospatialUpdate = useCallback(
+    (event: { nativeEvent: GeospatialUpdate }) => setGeospatial(event.nativeEvent),
+    [],
+  );
+  const handleAnchorsUpdate = useCallback(
+    (event: { nativeEvent: { anchors: ProjectedAnchor[] } }) =>
+      setProjectedAnchors(event.nativeEvent.anchors),
+    [],
+  );
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -104,13 +165,75 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     return () => subscription.remove();
   }, []);
 
+  // The route points to anchor, as a fixed lattice measured from the start of
+  // the route rather than from the walker.
+  //
+  // That is what makes the ids stable. Numbering from the walker would renumber
+  // every point on every fix, and since the native side matches anchors by id,
+  // renumbering means destroying and re-creating anchors that had not moved -
+  // the exact churn that makes AR markers jump. Measured from the route's
+  // start, a point keeps its id for the whole walk; advancing simply drops one
+  // off the back of the window and adds one at the front.
+  const routeAnchors = useMemo<GeoAnchor[]>(() => {
+    if (!position) return [];
+
+    const along = distanceAlongRoute(walkingRoute.coordinates, position);
+    const first = Math.ceil((along + ANCHOR_LEAD_M) / ANCHOR_SPACING_M);
+    const last = Math.floor((along + ANCHOR_HORIZON_M) / ANCHOR_SPACING_M);
+
+    const planted: GeoAnchor[] = [];
+    for (let id = first; id <= last; id += 1) {
+      const point = pointAtDistanceAlong(walkingRoute.coordinates, id * ANCHOR_SPACING_M);
+      // Undefined means the route has run out, so the run of chevrons stops at
+      // the destination instead of pointing past it.
+      if (!point) break;
+      planted.push({ id, latitude: point.latitude, longitude: point.longitude });
+    }
+    return planted;
+  }, [walkingRoute.coordinates, position]);
+
+  // Whether to draw the anchored chevrons or fall back to the compass-drawn
+  // ones. Both readings matter: the position fixes where the anchors go, and
+  // the heading fixes which way the AR session thinks north is - a yaw error
+  // swings the whole run of them sideways even when each is individually held
+  // still.
+  //
+  // Held as state with a gap between the two thresholds, so this answer changes
+  // only when the pose really has: see the constants above.
+  const [anchorsTrusted, setAnchorsTrusted] = useState(false);
+
+  useEffect(() => {
+    if (!geospatial) return;
+
+    const usable = geospatial.tracking && geospatial.horizontalAccuracy > 0;
+    if (
+      usable &&
+      geospatial.horizontalAccuracy <= TRUST_ANCHORS_ACCURACY_M &&
+      geospatial.headingAccuracy <= TRUST_ANCHORS_HEADING_DEG
+    ) {
+      setAnchorsTrusted(true);
+    } else if (
+      !usable ||
+      geospatial.horizontalAccuracy > DISTRUST_ANCHORS_ACCURACY_M ||
+      geospatial.headingAccuracy > DISTRUST_ANCHORS_HEADING_DEG
+    ) {
+      setAnchorsTrusted(false);
+    }
+  }, [geospatial]);
+
   // Two directions matter, not one: the way the route runs from here to the
   // next point, and the way it runs after that point. The first is where the
   // walker should be heading right now; the second is the turn they are being
   // warned about. Both are expressed relative to the way they are facing, so
   // they can be drawn straight onto the camera.
-  const targetIndex =
-    position !== null ? nextRoutePointIndex(walkingRoute.coordinates, position) : undefined;
+  // Memoised on the fix rather than recomputed per render: the AR session
+  // reports anchor positions every frame, so this component now renders at the
+  // camera's rate, and both of these walk the whole route polyline.
+  const targetIndex = useMemo(
+    () =>
+      position !== null ? nextRoutePointIndex(walkingRoute.coordinates, position) : undefined,
+    [walkingRoute.coordinates, position],
+  );
   const target = targetIndex !== undefined ? walkingRoute.coordinates[targetIndex] : undefined;
 
   const bearingToNext =
@@ -136,7 +259,10 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // metres apart, so a banner counting down to one would read "12 m" forever;
   // what a walker wants is the distance to the actual manoeuvre and the name
   // of the street it puts them on.
-  const stepIndex = position ? currentStepIndex(walkingRoute, position) : undefined;
+  const stepIndex = useMemo(
+    () => (position ? currentStepIndex(walkingRoute, position) : undefined),
+    [walkingRoute, position],
+  );
   const step = stepIndex !== undefined ? walkingRoute.steps[stepIndex] : undefined;
   const nextStep = stepIndex !== undefined ? walkingRoute.steps[stepIndex + 1] : undefined;
 
@@ -183,17 +309,39 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   const exit = () => navigation.goBack();
 
+  // ARKit runs the camera where it exists, because only one thing can hold it
+  // and the arrows need the pose. Elsewhere the plain preview stands in, and
+  // the chevrons fall back to being drawn from the compass.
+  const surface = isARGeospatialSupported ? (
+    <ARGeospatialView
+      style={StyleSheet.absoluteFill}
+      apiKey={GOOGLE_MAPS_API_KEY}
+      anchors={routeAnchors}
+      onGeospatialUpdate={handleGeospatialUpdate}
+      onAnchorsUpdate={handleAnchorsUpdate}
+    />
+  ) : undefined;
+
   return (
-    <CameraStage isActive>
+    <CameraStage isActive surface={surface}>
       {/* Under the hazard overlay: a hazard on the path is the more urgent of
-          the two, and must never end up behind a chevron pointing at it. */}
-      <GroundArrows
-        bearingToNext={bearingToNext}
-        metersToNext={metersToTarget}
-        bearingAfterNext={bearingAfterNext}
-        pitchDegrees={pitch}
-        color={T.green}
-      />
+          the two, and must never end up behind a chevron pointing at it.
+
+          One of the two, never both - they draw the same run of chevrons from
+          different sources, and showing them together would read as a double
+          image wherever the two disagreed, which is precisely where it would
+          matter most. */}
+      {anchorsTrusted ? (
+        <GroundChevrons anchors={projectedAnchors} color={T.green} />
+      ) : (
+        <GroundArrows
+          bearingToNext={bearingToNext}
+          metersToNext={metersToTarget}
+          bearingAfterNext={bearingAfterNext}
+          pitchDegrees={pitch}
+          color={T.green}
+        />
+      )}
 
       <HazardOverlay detections={detections} />
 
@@ -205,6 +353,15 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           exit control up here was a redundant way to lose the route. Both cue
           types are live on a route, so both get a pill. */}
       <View style={[styles.topRow, { top: insets.top + BANNER_TOP_GAP + bannerHeight + 8 }]}>
+        {/* Only while the AR session is still working out where it is. The
+            instruction is the one thing a walker can do to speed that up, and
+            it disappears the moment it is no longer true, so it never becomes
+            chrome to be ignored. */}
+        {surface && !anchorsTrusted && (
+          <Text style={[styles.scanHint, { fontSize: F.tinySm }]} numberOfLines={2}>
+            Point your phone at the buildings to lock on
+          </Text>
+        )}
         <VoiceCuePill cue="turns" />
         <VoiceCuePill cue="hazards" />
       </View>
@@ -359,6 +516,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
+  },
+  scanHint: {
+    flex: 1,
+    color: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(20,20,20,0.7)',
+    borderRadius: RADIUS.small,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
   },
   bannerText: { flex: 1 },
   bannerDistance: { color: '#fff', fontWeight: '700' },
