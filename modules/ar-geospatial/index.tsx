@@ -58,6 +58,30 @@ export interface ProjectedAnchor {
   outline?: number[];
 }
 
+/** One detection, straight off the model. Deliberately not `HazardDetection`
+ *  from the app's own types: `hazardClass` is whatever string the model was
+ *  trained with, and it stays untrusted until the JS side has checked it
+ *  against the classes the app knows about. */
+export interface RawHazard {
+  hazardClass: string;
+  confidence: number;
+  /** Normalised to the frame, origin top-left - already flipped from Vision's
+   *  bottom-left origin on the native side. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface HazardsEvent {
+  hazards: RawHazard[];
+  /** Set when the model could not be loaded at all, and then only once. An
+   *  empty hazard list means "nothing in view"; this means "nothing will ever
+   *  be in view", which the screens need to say out loud rather than look
+   *  like a camera that never finds anything. */
+  error?: string;
+}
+
 export interface ARGeospatialViewProps extends ViewProps {
   apiKey: string;
   anchors: GeoAnchor[];
@@ -66,6 +90,15 @@ export interface ARGeospatialViewProps extends ViewProps {
   showControlAnchors?: boolean;
   onGeospatialUpdate?: (event: { nativeEvent: GeospatialUpdate }) => void;
   onAnchorsUpdate?: (event: { nativeEvent: { anchors: ProjectedAnchor[] } }) => void;
+  onHazards?: (event: { nativeEvent: HazardsEvent }) => void;
+}
+
+export interface HazardCameraViewProps extends ViewProps {
+  /** False releases the camera. Tab screens pass their focused state, so
+   *  switching away stops the session rather than leaving it running behind
+   *  another screen. */
+  isActive?: boolean;
+  onHazards?: (event: { nativeEvent: HazardsEvent }) => void;
 }
 
 /** Whether this platform has the native view at all. Callers check it to pick
@@ -78,10 +111,24 @@ export const isARGeospatialSupported = Platform.OS === 'ios';
 // Resolved behind the platform check rather than at import: `requireNativeView`
 // throws when the view is not registered, and that would take down any screen
 // that so much as imports this file on Android.
+// Both views are asked for by name. The module defines two, and an unnamed
+// lookup resolves to whichever happens to be declared first - which would make
+// reordering the Swift file change what this returns.
 const NativeView: React.ComponentType<ARGeospatialViewProps> | null =
-  isARGeospatialSupported ? requireNativeView('ARGeospatial') : null;
+  isARGeospatialSupported ? requireNativeView('ARGeospatial', 'ARGeospatialView') : null;
+
+const NativeHazardCamera: React.ComponentType<HazardCameraViewProps> | null =
+  isARGeospatialSupported ? requireNativeView('ARGeospatial', 'HazardCameraView') : null;
 
 export function ARGeospatialView(props: ARGeospatialViewProps) {
   if (!NativeView) return null;
   return <NativeView {...props} />;
+}
+
+/** The Hazard Detection screen's camera: the same model as the AR view runs,
+ *  without the AR session. Returns null where the native module does not
+ *  exist, so callers fall back to a plain preview rather than crashing. */
+export function HazardCameraView(props: HazardCameraViewProps) {
+  if (!NativeHazardCamera) return null;
+  return <NativeHazardCamera {...props} />;
 }

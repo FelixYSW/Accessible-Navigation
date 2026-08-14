@@ -315,6 +315,106 @@ export function pointAtDistanceAlong(
   return undefined;
 }
 
+// Metres per degree of latitude. Longitude shrinks towards the poles, so it is
+// scaled by the cosine of the latitude wherever it is used.
+const METERS_PER_DEGREE_LAT = (EARTH_RADIUS_METERS * Math.PI) / 180;
+
+// The local north/east displacement from one coordinate to another, in metres.
+//
+// A flat approximation, which over the tens of metres this is used for is
+// accurate to well under a centimetre - far below the accuracy of anything
+// being measured with it.
+export function metersBetween(from: LatLng, to: LatLng): { north: number; east: number } {
+  return {
+    north: (to.latitude - from.latitude) * METERS_PER_DEGREE_LAT,
+    east:
+      (to.longitude - from.longitude) *
+      METERS_PER_DEGREE_LAT *
+      Math.cos(toRadians(from.latitude)),
+  };
+}
+
+/** The inverse of `metersBetween`: a coordinate shifted by a north/east offset. */
+export function offsetCoordinate(origin: LatLng, north: number, east: number): LatLng {
+  return {
+    latitude: origin.latitude + north / METERS_PER_DEGREE_LAT,
+    longitude:
+      origin.longitude +
+      east / (METERS_PER_DEGREE_LAT * Math.cos(toRadians(origin.latitude))),
+  };
+}
+
+// The direction the route runs at a given distance along it, as a unit
+// north/east vector. Measured across a short span rather than from one vertex
+// to the next, since consecutive vertices can sit centimetres apart and the
+// direction between them is then mostly rounding noise.
+export function routeDirectionAt(
+  coordinates: LatLng[],
+  meters: number,
+  spanMeters = 1.5,
+): { north: number; east: number } | undefined {
+  const half = spanMeters / 2;
+  const behind = pointAtDistanceAlong(coordinates, Math.max(0, meters - half));
+  // Past the end of the route there is nothing ahead to aim at, so the span
+  // collapses backwards onto the last of it.
+  const ahead =
+    pointAtDistanceAlong(coordinates, meters + half) ??
+    pointAtDistanceAlong(coordinates, meters) ??
+    coordinates[coordinates.length - 1];
+
+  if (!behind || !ahead) return undefined;
+
+  const delta = metersBetween(behind, ahead);
+  const length = Math.hypot(delta.north, delta.east);
+  if (length < 1e-6) return undefined;
+
+  return { north: delta.north / length, east: delta.east / length };
+}
+
+// How far to one side of the route a position is standing, in metres, positive
+// to the right of the direction of travel.
+//
+// This is the number that says which pavement someone is on. Walking routes are
+// drawn down the middle of the road, so a walker is reliably a couple of metres
+// to one side of the line the route describes - and it is a *signed*,
+// perpendicular quantity rather than a fixed compass offset, because "the left
+// pavement" points a different way on every leg of the route.
+export function lateralOffsetFromRoute(
+  coordinates: LatLng[],
+  position: LatLng,
+): number | undefined {
+  const along = distanceAlongRoute(coordinates, position);
+  const onRoute = pointAtDistanceAlong(coordinates, along);
+  const direction = routeDirectionAt(coordinates, along);
+  if (!onRoute || !direction) return undefined;
+
+  const delta = metersBetween(onRoute, position);
+  // Dot with the rightward normal of the direction of travel, which in
+  // north/east terms is (-east, north).
+  return delta.north * -direction.east + delta.east * direction.north;
+}
+
+// A point a given distance along the route, shifted sideways onto the walker's
+// own side of it. The shift follows the route round its corners, since it is
+// applied along the local perpendicular rather than as a fixed bearing.
+export function pointBesideRoute(
+  coordinates: LatLng[],
+  meters: number,
+  lateralMeters: number,
+): LatLng | undefined {
+  const point = pointAtDistanceAlong(coordinates, meters);
+  if (!point || lateralMeters === 0) return point;
+
+  const direction = routeDirectionAt(coordinates, meters);
+  if (!direction) return point;
+
+  return offsetCoordinate(
+    point,
+    -direction.east * lateralMeters,
+    direction.north * lateralMeters,
+  );
+}
+
 // Where the foot of the perpendicular from `position` falls on segment a-b, as
 // a 0-1 fraction of the segment, clamped to its ends.
 //

@@ -4,8 +4,13 @@ public class ARGeospatialModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ARGeospatial")
 
+    // Both views carry an explicit Name. It can be inferred from the class, but
+    // this module defines two views and the JS side asks for each by name, so
+    // leaving it to inference would make a Swift class rename silently break
+    // the lookup at runtime rather than loudly at build time.
     View(ARGeospatialView.self) {
-      Events("onGeospatialUpdate", "onAnchorsUpdate")
+      Name("ARGeospatialView")
+      Events("onGeospatialUpdate", "onAnchorsUpdate", "onHazards")
 
       // The Cloud API key with the ARCore API enabled on it. Passed in from JS
       // rather than read from the Info.plist so it keeps coming from the same
@@ -24,6 +29,17 @@ public class ARGeospatialModule: Module {
       // screen to judge the tracking against. Off on a real route.
       Prop("showControlAnchors") { (view: ARGeospatialView, show: Bool) in
         view.setShowControlAnchors(show)
+      }
+    }
+
+    // The Hazard Detection screen's camera: the same model as above, without
+    // the AR session it has no use for.
+    View(HazardCameraView.self) {
+      Name("HazardCameraView")
+      Events("onHazards")
+
+      Prop("isActive") { (view: HazardCameraView, active: Bool) in
+        view.setIsActive(active)
       }
     }
   }

@@ -10,9 +10,13 @@ name: Build iOS IPA
 # free Apple ID at install time. No Apple Developer Program membership or
 # Expo account is required for this workflow.
 #
-# Required repository secret:
+# Required repository secrets:
 #   GOOGLE_MAPS_API_KEY - a Google Maps API key with the Places API and
 #   Directions API enabled, used for macro-navigation routing.
+#   ORS_API_KEY - an OpenRouteService key (free from openrouteservice.org),
+#   used for accessibility-aware routing when a mobility aid is set. Optional:
+#   without it the app still routes via Google and still screens those routes
+#   against OpenStreetMap, it just cannot plan a route around barriers.
 
 on:
   push:
@@ -29,6 +33,7 @@ jobs:
     timeout-minutes: 60
     env:
       GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+      ORS_API_KEY: ${{ secrets.ORS_API_KEY }}
 
     steps:
       - name: Checkout repository

@@ -40,9 +40,15 @@ enum GroundChevron {
   static let cameraHeightM: Double = 1.4
 
   /// One chevron in its own frame, in metres: x across the path, y along it.
-  /// A metre wide, so it reads at walking scale.
+  ///
+  /// 1.3m across and 1.1m deep - about the width of a pavement, and big enough
+  /// that the nearest one fills a good part of the lower screen. Sized against
+  /// the 1.5m anchor spacing rather than chosen in isolation: at this depth the
+  /// run leaves only a 40cm gap between chevrons, so it reads as a continuous
+  /// painted ribbon leading away rather than as separate marks that have to be
+  /// picked out of the pavement one at a time.
   static let outline: [(across: Float, ahead: Float)] = [
-    (0, 0.4), (0.5, -0.16), (0.5, -0.4), (0, 0.16), (-0.5, -0.4), (-0.5, -0.16),
+    (0, 0.55), (0.65, -0.2), (0.65, -0.55), (0, 0.2), (-0.65, -0.55), (-0.65, -0.2),
   ]
 }
 
@@ -65,6 +71,14 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   let onGeospatialUpdate = EventDispatcher()
   let onAnchorsUpdate = EventDispatcher()
+  let onHazards = EventDispatcher()
+
+  /// The same detector the Hazard Detection screen runs, fed from ARKit's
+  /// frames instead of an AVFoundation session. ARKit owns the camera on this
+  /// screen, so there is no second stream to read - and no need for one, since
+  /// its frames are the same frames.
+  private let detector = HazardDetector()
+  private var reportedDetectorFailure = false
 
   private let sceneView = ARSCNView()
   private var garSession: GARSession?
@@ -162,6 +176,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
     placeLocalAnchorsIfNeeded(frame: frame)
+    detectHazards(in: frame)
 
     guard let garSession else {
       // No ARCore session yet - the local anchors are still worth drawing, so
@@ -182,6 +197,23 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func session(_ session: ARSession, didFailWithError error: Error) {
     report(failure: "Camera tracking failed: \(error.localizedDescription)")
+  }
+
+  /// The detector throttles itself, so this can be called on every frame - it
+  /// returns immediately on the ones it decides to skip.
+  private func detectHazards(in frame: ARFrame) {
+    if let failure = detector.loadFailure {
+      guard !reportedDetectorFailure else { return }
+      reportedDetectorFailure = true
+      onHazards(["hazards": [] as [[String: Any]], "error": failure])
+      return
+    }
+
+    // ARKit hands over its capture buffer in the camera's native landscape
+    // orientation, a quarter turn from the portrait frame it is displayed in.
+    detector.detect(pixelBuffer: frame.capturedImage, orientation: .right) { [weak self] hazards in
+      self?.onHazards(["hazards": hazards])
+    }
   }
 
   // MARK: - Geospatial

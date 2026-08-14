@@ -35,17 +35,20 @@ export const DEFAULT_CAMERA_PITCH_DEG = 30;
 // projects to a 2px sliver - correct, and useless. These four span roughly
 // 175px of screen at the front down to 60px at the back on a 402pt phone,
 // which reads as a receding run of large floor markings.
-const ARROW_DISTANCES_M = [1.8, 2.9, 4.2, 5.8];
+const ARROW_DISTANCES_M = [1.8, 3.1, 4.6, 6.4];
 
 // One chevron, in metres, in its own frame: +y is the way it points, x is
-// across the path. A metre wide, so it reads at walking scale.
+// across the path. Matches the anchored chevrons exactly - the two treatments
+// swap over mid-walk as localisation comes and goes, and a change of size at
+// that moment would read as the guidance itself changing rather than as the
+// same guidance from a different source.
 const CHEVRON_M: [number, number][] = [
-  [0, 0.4],
-  [0.5, -0.16],
-  [0.5, -0.4],
-  [0, 0.16],
-  [-0.5, -0.4],
-  [-0.5, -0.16],
+  [0, 0.55],
+  [0.65, -0.2],
+  [0.65, -0.55],
+  [0, 0.2],
+  [-0.65, -0.55],
+  [-0.65, -0.2],
 ];
 
 // How far the path takes to swing into a turn, centred on the turn point. A
@@ -66,7 +69,7 @@ const MIN_DEPTH_M = 0.6;
 // The nearest chevron is solid and the furthest is faint, which is what gives
 // the run its sense of receding.
 const NEAR_OPACITY = 0.95;
-const FAR_OPACITY = 0.4;
+const FAR_OPACITY = 0.62;
 
 interface GroundArrowsProps {
   /** Which way the route goes from where the walker is standing, relative to
@@ -111,18 +114,29 @@ export function GroundArrows({
 
   return (
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+      {/* Drawn twice, like the anchored chevrons: a heavy dark halo underneath
+          and a bright rim on top. One outline colour always loses against one
+          of the two grounds this has to work on - pale concrete and dark wet
+          asphalt - so it gets both. */}
       {chevrons.map((chevron, index) => (
-        <Polygon
-          key={index}
-          points={chevron.points}
-          fill={color}
-          fillOpacity={chevron.opacity}
-          // A dark edge, so the run stays legible over pale concrete as well
-          // as dark asphalt.
-          stroke="rgba(0,0,0,0.45)"
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-        />
+        <React.Fragment key={index}>
+          <Polygon
+            points={chevron.points}
+            fill="none"
+            stroke="rgba(0,0,0,0.55)"
+            strokeWidth={7}
+            strokeLinejoin="round"
+          />
+          <Polygon
+            points={chevron.points}
+            fill={color}
+            fillOpacity={chevron.opacity}
+            stroke="#ffffff"
+            strokeOpacity={0.85}
+            strokeWidth={2}
+            strokeLinejoin="round"
+          />
+        </React.Fragment>
       ))}
     </Svg>
   );

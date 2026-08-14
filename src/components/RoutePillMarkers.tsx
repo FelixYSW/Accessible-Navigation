@@ -88,6 +88,9 @@ export function RoutePillMarkers({
           distance={pills[index].distance}
           selected={index === selectedIndex}
           onPress={() => onSelect(index)}
+          // Whether this pill has laid out yet. Feeds the marker's snapshot
+          // window - see PillMarker for why that matters.
+          measured={pillSizes[index] !== undefined}
           onMeasure={(measured) => measurePill(index, measured)}
           accessibilityLabel={`Route ${index + 1}: ${pills[index].duration}, ${
             pills[index].distance
@@ -103,6 +106,7 @@ interface PillMarkerProps {
   duration: string;
   distance: string;
   selected: boolean;
+  measured: boolean;
   onPress: () => void;
   onMeasure: (size: Size) => void;
   accessibilityLabel: string;
@@ -113,16 +117,25 @@ interface PillMarkerProps {
 // and the map stutters; turned off too early, the snapshot is taken before the
 // view has drawn and the marker comes out blank. So it is held on for a moment
 // after anything that changes how the pill looks, then switched off.
+//
+// `measured` is in the signature for a reason that is easy to miss and produces
+// a completely invisible pill when missed. The window used to be timed from
+// mount, which races the pill's own layout: if the contents draw after the
+// window has closed, the map has already taken its snapshot of an empty view
+// and never takes another. Including the flag re-arms the window at the moment
+// the pill reports its size, which guarantees at least one snapshot of a pill
+// that has actually drawn.
 function PillMarker({
   coordinate,
   duration,
   distance,
   selected,
+  measured,
   onPress,
   onMeasure,
   accessibilityLabel,
 }: PillMarkerProps) {
-  const tracking = useTrackingWindow(`${duration}|${distance}|${selected}`);
+  const tracking = useTrackingWindow(`${duration}|${distance}|${selected}|${measured}`);
 
   return (
     <Marker

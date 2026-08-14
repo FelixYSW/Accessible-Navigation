@@ -36,4 +36,17 @@ Pod::Spec.new do |s|
   }
 
   s.source_files = '**/*.{h,m,mm,swift,hpp,cpp}'
+
+  # The trained hazard model, copied into the app bundle and compiled to
+  # .mlmodelc on first launch.
+  #
+  # It ships through the pod rather than through a config plugin because the
+  # generated iOS project is thrown away and rebuilt on every prebuild, so
+  # anything added to it by hand does not survive - whereas this directory is
+  # committed, and CocoaPods copies it in every time.
+  #
+  # The glob matters: a missing file makes CocoaPods warn and carry on, so the
+  # app still builds before the model has been trained. The detector reports the
+  # absence instead of silently finding nothing.
+  s.resources = ['HazardDetector.mlpackage']
 end

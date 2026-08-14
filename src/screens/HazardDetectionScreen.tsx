@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
+import { HazardCameraView, isARGeospatialSupported } from '../../modules/ar-geospatial';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { PulsingDot } from '../components/PulsingDot';
@@ -9,7 +10,7 @@ import { VoiceCuePill } from '../components/VoiceCuePill';
 import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { HAZARD_CLASSES } from '../types/hazard';
-import { useStubHazardDetector } from '../services/hazardDetector';
+import { useHazardDetections } from '../services/hazardDetector';
 
 // Standalone hazard scanning: the same detection treatment as AR Navigation,
 // but with no route required - the third tab in the redesign.
@@ -26,10 +27,20 @@ export function HazardDetectionScreen() {
   // Only run the camera and the detector while this tab is on screen, so
   // switching to Navigate or Settings releases the camera instead of holding
   // it open in the background.
-  const detections = useStubHazardDetector(isFocused, activeClasses);
+  const { detections, error, onHazards } = useHazardDetections(isFocused, activeClasses);
+
+  // The camera that also runs the model. Same detector as AR Navigation, minus
+  // the AR session that screen needs and this one does not.
+  const surface = isARGeospatialSupported ? (
+    <HazardCameraView
+      style={StyleSheet.absoluteFill}
+      isActive={isFocused}
+      onHazards={onHazards}
+    />
+  ) : undefined;
 
   return (
-    <CameraStage isActive={isFocused}>
+    <CameraStage isActive={isFocused} surface={surface}>
       <HazardOverlay detections={detections} />
 
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
@@ -47,10 +58,14 @@ export function HazardDetectionScreen() {
           bar below it already covers the home indicator. */}
       <View style={styles.sheet}>
         <Text style={[styles.sheetTitle, { fontSize: F.body }]}>
-          Point your camera at the path ahead
+          {error ? 'Detection unavailable' : 'Point your camera at the path ahead'}
         </Text>
+        {/* A model that failed to load says so. Without this the screen looks
+            identical to one pointed at a perfectly clear pavement, and the
+            difference between "nothing here" and "nothing will ever be found"
+            is the whole diagnosis. */}
         <Text style={[styles.sheetSubtitle, { fontSize: F.tinySm }]}>
-          Hazards are flagged in real time, no route needed
+          {error ?? 'Hazards are flagged in real time, no route needed'}
         </Text>
       </View>
     </CameraStage>

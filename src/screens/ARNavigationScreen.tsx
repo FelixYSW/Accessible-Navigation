@@ -12,8 +12,9 @@ import {
   bearingBetween,
   distanceAlongRoute,
   distanceMeters,
+  lateralOffsetFromRoute,
   nextRoutePointIndex,
-  pointAtDistanceAlong,
+  pointBesideRoute,
   relativeBearing,
   routeBearingAfter,
 } from '../utils/geo';
@@ -24,7 +25,7 @@ import {
   type GeospatialUpdate,
   type ProjectedAnchor,
 } from '../../modules/ar-geospatial';
-import { useStubHazardDetector } from '../services/hazardDetector';
+import { useHazardDetections } from '../services/hazardDetector';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
 import { GroundChevrons } from '../components/GroundChevrons';
@@ -36,6 +37,7 @@ import {
   type Maneuver,
 } from '../components/maneuverIcons';
 import { HazardOverlay } from '../components/HazardOverlay';
+import { ScanPrompt } from '../components/ScanPrompt';
 import { VoiceCuePill } from '../components/VoiceCuePill';
 import { useSettings } from '../theme/SettingsContext';
 import { routeDurationSeconds } from '../services/mobility';
@@ -58,14 +60,53 @@ const PITCH_SMOOTHING = 0.25;
 // topmost thing on this screen.
 const BANNER_TOP_GAP = 4;
 
-// Where the anchored chevrons are planted along the route: one every couple of
-// metres, from just in front of the walker out to the far end of what reads on
-// screen. Past that the ground compresses towards the horizon and a chevron
-// projects to a sliver, so anchoring more of them costs tracking work for
-// something nobody can see.
-const ANCHOR_SPACING_M = 2;
-const ANCHOR_LEAD_M = 1.5;
-const ANCHOR_HORIZON_M = 14;
+// Where the anchored chevrons are planted along the route: a close, tight run
+// starting just in front of the walker's feet.
+//
+// The spacing is what decides how near the first one can be. Anchors sit on a
+// fixed lattice measured from the route's start, so the nearest one lands
+// anywhere between the lead distance and one spacing beyond it - at 2m spacing
+// that meant the first chevron could be three and a half metres off, which
+// reads as the run starting somewhere up the street rather than at your feet.
+const ANCHOR_SPACING_M = 1.5;
+const ANCHOR_LEAD_M = 1.2;
+const ANCHOR_HORIZON_M = 12;
+
+// How far the run may be shifted sideways to sit under the walker, and how much
+// that shift has to change before it is worth re-planting the anchors.
+//
+// Walking routes are drawn down the middle of the road, not along the pavement
+// anyone actually walks on, so chevrons laid exactly on the route line appear
+// out in the traffic or across the street. Shifting the whole visible run by
+// the walker's own offset from that line puts it back on the pavement they are
+// standing on.
+//
+// Capped, because past a few metres the offset stops meaning "which side of the
+// road" and starts meaning "not on this road at all" - and then the honest
+// thing is to draw the real route and let them walk back to it.
+const MAX_PATH_OFFSET_M = 8;
+const OFFSET_DEADBAND_M = 1.5;
+
+// Anchors are matched by id on the native side, so one whose coordinate has
+// changed must change id too - otherwise the old anchor is judged still wanted
+// and quietly kept at the old place. The sideways shift is therefore folded
+// into the id, which makes moving the run retire every id in it and plant a
+// fresh set. That is the intended behaviour, not a workaround: the run really
+// has moved, and pretending otherwise is what would look wrong.
+//
+// Lattice indices are the distance along the route divided by the spacing, so
+// they stay far below the stride for any walkable route.
+const OFFSET_ID_STRIDE = 1_000_000;
+const OFFSET_HALF_METRES = 32;
+
+function offsetKeyFor(lateralMeters: number): number {
+  return (
+    Math.min(
+      OFFSET_HALF_METRES,
+      Math.max(-OFFSET_HALF_METRES, Math.round(lateralMeters * 2)),
+    ) + OFFSET_HALF_METRES
+  );
+}
 
 // When the geospatial pose is good enough to plant anchors on. Looser than the
 // test screen's thresholds, because these two readings do different jobs here:
@@ -124,7 +165,8 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
     [hazardActive],
   );
-  const detections = useStubHazardDetector(true, activeClasses);
+  // Fed by the AR view below, which runs the same model over ARKit's frames.
+  const { detections, onHazards } = useHazardDetections(true, activeClasses);
 
   useEffect(() => {
     let positionSubscription: Location.LocationSubscription | undefined;
@@ -165,33 +207,6 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     return () => subscription.remove();
   }, []);
 
-  // The route points to anchor, as a fixed lattice measured from the start of
-  // the route rather than from the walker.
-  //
-  // That is what makes the ids stable. Numbering from the walker would renumber
-  // every point on every fix, and since the native side matches anchors by id,
-  // renumbering means destroying and re-creating anchors that had not moved -
-  // the exact churn that makes AR markers jump. Measured from the route's
-  // start, a point keeps its id for the whole walk; advancing simply drops one
-  // off the back of the window and adds one at the front.
-  const routeAnchors = useMemo<GeoAnchor[]>(() => {
-    if (!position) return [];
-
-    const along = distanceAlongRoute(walkingRoute.coordinates, position);
-    const first = Math.ceil((along + ANCHOR_LEAD_M) / ANCHOR_SPACING_M);
-    const last = Math.floor((along + ANCHOR_HORIZON_M) / ANCHOR_SPACING_M);
-
-    const planted: GeoAnchor[] = [];
-    for (let id = first; id <= last; id += 1) {
-      const point = pointAtDistanceAlong(walkingRoute.coordinates, id * ANCHOR_SPACING_M);
-      // Undefined means the route has run out, so the run of chevrons stops at
-      // the destination instead of pointing past it.
-      if (!point) break;
-      planted.push({ id, latitude: point.latitude, longitude: point.longitude });
-    }
-    return planted;
-  }, [walkingRoute.coordinates, position]);
-
   // Whether to draw the anchored chevrons or fall back to the compass-drawn
   // ones. Both readings matter: the position fixes where the anchors go, and
   // the heading fixes which way the AR session thinks north is - a yaw error
@@ -220,6 +235,78 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       setAnchorsTrusted(false);
     }
   }, [geospatial]);
+
+  // Where the anchors are measured from.
+  //
+  // The AR session's own fix, not the phone's, whenever it is trustworthy. This
+  // is the single most important line for how the chevrons look: ARCore
+  // localises to well under a metre where the GPS fix is five to ten, and since
+  // the run is laid out relative to where the walker is, a fix that says they
+  // are eight metres back puts the whole run eight metres too far up the road.
+  const anchorOrigin = useMemo<LatLng | null>(
+    () =>
+      anchorsTrusted && geospatial
+        ? { latitude: geospatial.latitude, longitude: geospatial.longitude }
+        : position,
+    [anchorsTrusted, geospatial, position],
+  );
+
+  // How far the walker is standing to one side of the drawn route, held steady
+  // so it only changes when they genuinely move across - not every time the
+  // fix wobbles by a few centimetres.
+  const [pathOffset, setPathOffset] = useState(0);
+
+  useEffect(() => {
+    if (!anchorOrigin) return;
+
+    const measured = lateralOffsetFromRoute(walkingRoute.coordinates, anchorOrigin);
+    if (measured === undefined) return;
+
+    // Past the cap this has stopped meaning "the other pavement" and started
+    // meaning "not on this road", and the honest answer then is the real route.
+    const target = Math.abs(measured) <= MAX_PATH_OFFSET_M ? measured : 0;
+
+    setPathOffset((current) => {
+      if (Math.abs(target - current) <= OFFSET_DEADBAND_M) return current;
+      // Snapped to half a metre. The offset is baked into each anchor's id, so
+      // every change re-plants the run - quantising keeps that to the rare
+      // occasions it is warranted.
+      return Math.round(target * 2) / 2;
+    });
+  }, [walkingRoute.coordinates, anchorOrigin]);
+
+  // The route points to anchor, as a fixed lattice measured from the start of
+  // the route rather than from the walker.
+  //
+  // That is what makes the ids stable. Numbering from the walker would renumber
+  // every point on every fix, and since the native side matches anchors by id,
+  // renumbering means destroying and re-creating anchors that had not moved -
+  // the exact churn that makes AR markers jump. Measured from the route's
+  // start, a point keeps its id for the whole walk; advancing simply drops one
+  // off the back of the window and adds one at the front.
+  const routeAnchors = useMemo<GeoAnchor[]>(() => {
+    if (!anchorOrigin) return [];
+
+    const along = distanceAlongRoute(walkingRoute.coordinates, anchorOrigin);
+    const first = Math.ceil((along + ANCHOR_LEAD_M) / ANCHOR_SPACING_M);
+    const last = Math.floor((along + ANCHOR_HORIZON_M) / ANCHOR_SPACING_M);
+    const shift = offsetKeyFor(pathOffset) * OFFSET_ID_STRIDE;
+
+    const planted: GeoAnchor[] = [];
+    for (let index = first; index <= last; index += 1) {
+      const point = pointBesideRoute(
+        walkingRoute.coordinates,
+        index * ANCHOR_SPACING_M,
+        pathOffset,
+      );
+      // Undefined means the route has run out, so the run of chevrons stops at
+      // the destination instead of pointing past it.
+      if (!point) break;
+
+      planted.push({ id: index + shift, latitude: point.latitude, longitude: point.longitude });
+    }
+    return planted;
+  }, [walkingRoute.coordinates, anchorOrigin, pathOffset]);
 
   // Two directions matter, not one: the way the route runs from here to the
   // next point, and the way it runs after that point. The first is where the
@@ -319,6 +406,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       anchors={routeAnchors}
       onGeospatialUpdate={handleGeospatialUpdate}
       onAnchorsUpdate={handleAnchorsUpdate}
+      onHazards={onHazards}
     />
   ) : undefined;
 
@@ -345,6 +433,16 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
       <HazardOverlay detections={detections} />
 
+      {/* Above the overlays but below the banner and the sheet: it is asking
+          for something, so it must not sit under the thing it is asking about,
+          and it must not bury the instruction or the way out of the route. */}
+      <ScanPrompt
+        visible={Boolean(surface) && !anchorsTrusted}
+        vpsAvailability={geospatial?.vpsAvailability}
+        horizontalAccuracy={geospatial?.horizontalAccuracy}
+        tracking={geospatial?.tracking}
+      />
+
       {/* Below the banner, not above it: the instruction is what the screen is
           for, so it takes the top of the frame and the cue switches sit under
           it. Offset by the banner's measured height rather than a constant,
@@ -353,15 +451,6 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           exit control up here was a redundant way to lose the route. Both cue
           types are live on a route, so both get a pill. */}
       <View style={[styles.topRow, { top: insets.top + BANNER_TOP_GAP + bannerHeight + 8 }]}>
-        {/* Only while the AR session is still working out where it is. The
-            instruction is the one thing a walker can do to speed that up, and
-            it disappears the moment it is no longer true, so it never becomes
-            chrome to be ignored. */}
-        {surface && !anchorsTrusted && (
-          <Text style={[styles.scanHint, { fontSize: F.tinySm }]} numberOfLines={2}>
-            Point your phone at the buildings to lock on
-          </Text>
-        )}
         <VoiceCuePill cue="turns" />
         <VoiceCuePill cue="hazards" />
       </View>
@@ -516,14 +605,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-  },
-  scanHint: {
-    flex: 1,
-    color: 'rgba(255,255,255,0.85)',
-    backgroundColor: 'rgba(20,20,20,0.7)',
-    borderRadius: RADIUS.small,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
   },
   bannerText: { flex: 1 },
   bannerDistance: { color: '#fff', fontWeight: '700' },
