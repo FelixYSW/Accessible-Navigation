@@ -30,6 +30,11 @@ export interface GeospatialUpdate {
  *  advances, would move anchors that should have stayed put. */
 export interface GeoAnchor {
   id: number;
+  /** `route` points carry the ground chevrons and are chained together to work
+   *  out which way the run faces. `destination` is a single marker at the end
+   *  of the journey, drawn as an upright pin and deliberately kept out of that
+   *  chain. Defaults to `route`. */
+  kind?: 'route' | 'destination';
   latitude: number;
   longitude: number;
 }
@@ -43,7 +48,7 @@ export interface ProjectedAnchor {
    *  so they work indoors - they are the control for judging whether the
    *  tracking itself holds still. `geospatial` anchors are pinned to real
    *  coordinates and only appear once Earth is localised. */
-  kind: 'local' | 'geospatial';
+  kind: 'local' | 'geospatial' | 'destination';
   x: number;
   y: number;
   /** Metres from the camera. */

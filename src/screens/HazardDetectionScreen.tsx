@@ -11,13 +11,14 @@ import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { HAZARD_CLASSES } from '../types/hazard';
 import { useHazardDetections } from '../services/hazardDetector';
+import { useSpokenHazardCues } from '../services/voiceCues';
 
 // Standalone hazard scanning: the same detection treatment as AR Navigation,
 // but with no route required - the third tab in the redesign.
 export function HazardDetectionScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const { F, scaled, hazardActive } = useSettings();
+  const { F, scaled, hazardActive, hazardCues } = useSettings();
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -28,6 +29,11 @@ export function HazardDetectionScreen() {
   // switching to Navigate or Settings releases the camera instead of holding
   // it open in the background.
   const { detections, error, onHazards } = useHazardDetections(isFocused, activeClasses);
+
+  // Silenced when the tab is not on screen, as well as by the preference: this
+  // screen stays mounted behind the others, and a backgrounded camera calling
+  // out potholes would be baffling.
+  useSpokenHazardCues(hazardCues && isFocused, detections);
 
   // The camera that also runs the model. Same detector as AR Navigation, minus
   // the AR session that screen needs and this one does not.

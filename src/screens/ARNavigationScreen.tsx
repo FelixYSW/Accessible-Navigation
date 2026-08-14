@@ -26,9 +26,11 @@ import {
   type ProjectedAnchor,
 } from '../../modules/ar-geospatial';
 import { useHazardDetections } from '../services/hazardDetector';
+import { useSpokenHazardCues, useSpokenTurnCues } from '../services/voiceCues';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
 import { GroundChevrons } from '../components/GroundChevrons';
+import { DestinationPin } from '../components/DestinationPin';
 import {
   MANEUVER_ICONS,
   MANEUVER_LABELS,
@@ -99,6 +101,19 @@ const OFFSET_DEADBAND_M = 1.5;
 const OFFSET_ID_STRIDE = 1_000_000;
 const OFFSET_HALF_METRES = 32;
 
+// The destination marker's anchor id. Negative, so it can never collide with a
+// lattice id however the run is shifted - those are always a non-negative index
+// plus a non-negative multiple of the stride.
+const DESTINATION_ANCHOR_ID = -1;
+
+// How close the walker has to be before the destination is anchored at all.
+//
+// Not a rendering limit. An anchor is placed against a pose whose error grows
+// with range, so a pin dropped from four hundred metres away would be planted
+// with confidence in the wrong building. Within this range the geospatial fix
+// is worth the certainty a pin implies.
+const DESTINATION_ANCHOR_RANGE_M = 60;
+
 function offsetKeyFor(lateralMeters: number): number {
   return (
     Math.min(
@@ -132,7 +147,7 @@ const DISTRUST_ANCHORS_HEADING_DEG = 25;
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
   const insets = useSafeAreaInsets();
-  const { T, F, scaled, hazardActive, mobilityAid } = useSettings();
+  const { T, F, scaled, hazardActive, mobilityAid, spokenTurns, hazardCues } = useSettings();
   const [position, setPosition] = useState<LatLng | null>(null);
   const [heading, setHeading] = useState(0);
   // How far the phone is tilted down from level. Measured, so the ground
@@ -305,8 +320,22 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
       planted.push({ id: index + shift, latitude: point.latitude, longitude: point.longitude });
     }
+
+    // The destination itself, once it is close enough to point at with any
+    // authority. Anchored on its true coordinate with no pavement shift: the
+    // chevrons are shifted because a route line is a rough guide to which side
+    // of the road to walk on, but the destination is an actual place.
+    if (distanceMeters(anchorOrigin, walkingRoute.destination) <= DESTINATION_ANCHOR_RANGE_M) {
+      planted.push({
+        id: DESTINATION_ANCHOR_ID,
+        kind: 'destination',
+        latitude: walkingRoute.destination.latitude,
+        longitude: walkingRoute.destination.longitude,
+      });
+    }
+
     return planted;
-  }, [walkingRoute.coordinates, anchorOrigin, pathOffset]);
+  }, [walkingRoute.coordinates, walkingRoute.destination, anchorOrigin, pathOffset]);
 
   // Two directions matter, not one: the way the route runs from here to the
   // next point, and the way it runs after that point. The first is where the
@@ -382,6 +411,18 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // where there is nothing left to turn onto.
   const road = nextStep?.road ?? step?.road;
 
+  // Spoken guidance, each half gated on its own preference so either can be
+  // silenced without losing the other - the whole point of splitting the two
+  // cue types in Settings.
+  useSpokenTurnCues({
+    enabled: spokenTurns,
+    maneuver,
+    road,
+    metersToManeuver,
+    stepIndex,
+  });
+  useSpokenHazardCues(hazardCues, detections);
+
   const progress = useTripProgress(walkingRoute, position);
   const remainingMeters = walkingRoute.distanceMeters * (1 - progress);
   // Rescaled to the pace implied by the Mobility aid setting, so the time
@@ -420,7 +461,16 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           image wherever the two disagreed, which is precisely where it would
           matter most. */}
       {anchorsTrusted ? (
-        <GroundChevrons anchors={projectedAnchors} color={T.green} />
+        <>
+          <GroundChevrons anchors={projectedAnchors} color={T.green} />
+          {/* Over the chevrons: the run leads to the pin, so the pin should
+              never be behind it. */}
+          <DestinationPin
+            anchors={projectedAnchors}
+            label={walkingRoute.destinationName}
+            color={T.green}
+          />
+        </>
       ) : (
         <GroundArrows
           bearingToNext={bearingToNext}

@@ -1,4 +1,8 @@
 import CoreML
+// CGImagePropertyOrientation, which appears in this file's own signatures.
+// Vision happens to pull it in transitively, but relying on that would make the
+// build depend on someone else's import list.
+import ImageIO
 import Vision
 
 /// Runs the trained YOLO26 hazard model over camera frames.

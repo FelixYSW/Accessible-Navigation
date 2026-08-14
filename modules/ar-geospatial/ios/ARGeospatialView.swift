@@ -20,6 +20,11 @@ import ExpoModulesCore
 /// anchors jump.
 struct GeoAnchorRecord: Record {
   @Field var id: Int = 0
+  /// "route" for the points the chevrons are drawn on, "destination" for the
+  /// journey's end. Only route points get a chevron and only route points take
+  /// part in working out which way the run is facing - a destination marker
+  /// sits where it sits and has no direction of travel through it.
+  @Field var kind: String = "route"
   @Field var latitude: Double = 0
   @Field var longitude: Double = 0
 }
@@ -87,7 +92,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// Route points waiting for Earth to start tracking, and the anchors made
   /// from them once it has, kept by id so the two can be reconciled without
   /// disturbing anchors that are already down.
-  private var requestedAnchors: [(id: Int, coordinate: CLLocationCoordinate2D)] = []
+  private var requestedAnchors: [(id: Int, kind: String, coordinate: CLLocationCoordinate2D)] = []
   private var placedAnchors: [Int: GARAnchor] = [:]
   private var anchorsAreStale = false
 
@@ -152,7 +157,11 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func setAnchors(_ anchors: [GeoAnchorRecord]) {
     requestedAnchors = anchors.map {
-      (id: $0.id, coordinate: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude))
+      (
+        id: $0.id,
+        kind: $0.kind,
+        coordinate: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+      )
     }
     anchorsAreStale = true
   }
@@ -342,10 +351,30 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
     // Route order matters here in a way it did not for the control anchors:
     // each chevron is turned to face the next point along, so the run of them
-    // follows the pavement round a corner.
+    // follows the pavement round a corner. Markers are held out of this - a
+    // destination pin has no direction through it, and letting one join the
+    // chain would swing the last chevron towards it.
     let route = requestedAnchors.compactMap { request -> (id: Int, position: simd_float3)? in
+      guard request.kind == "route" else { return nil }
       guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { return nil }
       return (id: request.id, position: origin(of: anchor.transform))
+    }
+
+    // Everything that is a point rather than a path: the destination pin. Sent
+    // with its own kind and no outline, since the JS side draws it as a sprite
+    // standing at the projected point rather than as a shape on the ground.
+    for request in requestedAnchors where request.kind != "route" {
+      guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { continue }
+      projected.append(
+        project(
+          position: origin(of: anchor.transform),
+          index: request.id,
+          kind: request.kind,
+          forward: nil,
+          arFrame: arFrame,
+          viewport: viewport
+        )
+      )
     }
 
     var forwards: [simd_float3] = []

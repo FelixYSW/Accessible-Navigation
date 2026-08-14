@@ -4,12 +4,16 @@ public class ARGeospatialModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ARGeospatial")
 
-    // Both views carry an explicit Name. It can be inferred from the class, but
-    // this module defines two views and the JS side asks for each by name, so
-    // leaving it to inference would make a Swift class rename silently break
-    // the lookup at runtime rather than loudly at build time.
+    // Both views carry an explicit name. It would otherwise be inferred from
+    // the class, but this module defines two views and the JS side asks for
+    // each by name, so leaving it to inference would make a Swift class rename
+    // silently break the lookup at runtime rather than loudly at build time.
+    //
+    // `ViewName` and not `Name`: inside a view block the builder only accepts a
+    // ViewNameDefinition, which is what this factory returns. `Name` is the
+    // module-level one and does not compile here.
     View(ARGeospatialView.self) {
-      Name("ARGeospatialView")
+      ViewName("ARGeospatialView")
       Events("onGeospatialUpdate", "onAnchorsUpdate", "onHazards")
 
       // The Cloud API key with the ARCore API enabled on it. Passed in from JS
@@ -35,7 +39,7 @@ public class ARGeospatialModule: Module {
     // The Hazard Detection screen's camera: the same model as above, without
     // the AR session it has no use for.
     View(HazardCameraView.self) {
-      Name("HazardCameraView")
+      ViewName("HazardCameraView")
       Events("onHazards")
 
       Prop("isActive") { (view: HazardCameraView, active: Bool) in
