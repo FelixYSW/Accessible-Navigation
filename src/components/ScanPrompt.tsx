@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import React from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { Radar } from 'lucide-react-native';
 import { useSettings } from '../theme/SettingsContext';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -14,6 +14,11 @@ import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 // Deliberately not a blocking modal. The user has to see through it to aim the
 // phone, so it dims rather than covers, and it never takes touches: the route
 // controls underneath stay live throughout.
+//
+// Static, with no animation on the icon. A pulsing ring reads as the app doing
+// something, when in fact the app is waiting on the user to do something - and
+// the progress bar below already reports the only thing that is actually
+// changing.
 
 // The accuracy readout is drawn as a bar between these. 30m is roughly a raw
 // GPS fix with no visual localisation at all; 5m is close enough that the
@@ -38,30 +43,10 @@ export function ScanPrompt({
   tracking,
 }: ScanPromptProps) {
   const { T, F, scaled } = useSettings();
-  const pulse = useRef(new Animated.Value(0)).current;
-
-  const hopeless = vpsAvailability === 'unavailable';
-
-  useEffect(() => {
-    if (!visible || hopeless) return;
-
-    const loop = Animated.loop(
-      Animated.timing(pulse, {
-        toValue: 1,
-        duration: 1800,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }),
-    );
-    loop.start();
-    return () => {
-      loop.stop();
-      pulse.setValue(0);
-    };
-  }, [visible, hopeless, pulse]);
 
   if (!visible) return null;
 
+  const hopeless = vpsAvailability === 'unavailable';
   const measured = tracking === true && (horizontalAccuracy ?? 0) > 0;
   const progress = measured
     ? Math.min(
@@ -78,23 +63,11 @@ export function ScanPrompt({
     <View style={styles.scrim} pointerEvents="none">
       <View style={styles.card}>
         <View style={styles.icon}>
-          {/* An expanding ring behind the glyph - the visual of a sweep going
-              out and finding something, which is what is being waited on. */}
-          {!hopeless && (
-            <Animated.View
-              style={[
-                styles.ring,
-                {
-                  borderColor: T.green,
-                  transform: [
-                    { scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.7] }) },
-                  ],
-                  opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] }),
-                },
-              ]}
-            />
-          )}
-          <Radar size={scaled(40)} color={hopeless ? 'rgba(255,255,255,0.7)' : T.green} strokeWidth={2} />
+          <Radar
+            size={scaled(40)}
+            color={hopeless ? 'rgba(255,255,255,0.7)' : T.green}
+            strokeWidth={2}
+          />
         </View>
 
         <Text style={[styles.title, { fontSize: F.h2 }]}>
@@ -104,13 +77,13 @@ export function ScanPrompt({
         <Text style={[styles.body, { fontSize: F.sm }]}>
           {hopeless
             ? 'Street imagery does not reach this spot, so the arrows are following your compass instead. They will still guide you, but may sit a little off the path.'
-            : 'Point your phone at the buildings around you. The arrows lock onto the street once it recognises where you are.'}
+            : 'Point your phone at the buildings around you. The arrows appear once it recognises where you are.'}
         </Text>
 
         {!hopeless && (
           <>
             <View style={styles.track}>
-              <Animated.View
+              <View
                 style={[
                   styles.fill,
                   { backgroundColor: T.green, width: `${Math.round(progress * 100)}%` },
@@ -152,13 +125,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
   },
   icon: { alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  ring: {
-    position: 'absolute',
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    borderWidth: 2,
-  },
   title: { color: '#fff', fontWeight: '700', textAlign: 'center' },
   body: {
     color: 'rgba(255,255,255,0.75)',

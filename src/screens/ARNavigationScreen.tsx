@@ -114,6 +114,11 @@ const DESTINATION_ANCHOR_ID = -1;
 // is worth the certainty a pin implies.
 const DESTINATION_ANCHOR_RANGE_M = 60;
 
+// How long to wait for a scan to succeed before falling back to compass-drawn
+// arrows, and how long the no-coverage explanation stays up.
+const SCAN_PATIENCE_MS = 30_000;
+const NO_COVERAGE_NOTICE_MS = 6_000;
+
 function offsetKeyFor(lateralMeters: number): number {
   return (
     Math.min(
@@ -250,6 +255,47 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       setAnchorsTrusted(false);
     }
   }, [geospatial]);
+
+  // Whether a scan is genuinely in progress, which is when the arrows are
+  // withheld: showing the compass-drawn run under a panel asking the user to
+  // scan says two contradictory things at once, and the run it would show is
+  // the less accurate of the two anyway.
+  //
+  // Deliberately narrower than "not localised". Somewhere with no Street View
+  // coverage will never localise however long the phone is waved about, and a
+  // walker left with no arrows at all in that case is worse off than one given
+  // compass arrows and told they are approximate.
+  const hopeless = geospatial?.vpsAvailability === 'unavailable';
+  const [scanAbandoned, setScanAbandoned] = useState(false);
+  const [noCoverageNoticeSeen, setNoCoverageNoticeSeen] = useState(false);
+
+  // A scan that has not succeeded in this long is not going to during this
+  // walk - a window looking onto a courtyard, a street Street View never drove.
+  // The guidance falls back rather than leaving the walker with nothing.
+  useEffect(() => {
+    if (anchorsTrusted || hopeless || !isARGeospatialSupported) {
+      setScanAbandoned(false);
+      return;
+    }
+    const timeout = setTimeout(() => setScanAbandoned(true), SCAN_PATIENCE_MS);
+    return () => clearTimeout(timeout);
+  }, [anchorsTrusted, hopeless]);
+
+  // The no-coverage explanation is worth reading once, not for the whole walk -
+  // it dims the camera, and the camera is the screen.
+  useEffect(() => {
+    if (!hopeless) {
+      setNoCoverageNoticeSeen(false);
+      return;
+    }
+    const timeout = setTimeout(() => setNoCoverageNoticeSeen(true), NO_COVERAGE_NOTICE_MS);
+    return () => clearTimeout(timeout);
+  }, [hopeless]);
+
+  const scanning =
+    isARGeospatialSupported && !anchorsTrusted && !hopeless && !scanAbandoned;
+  const promptVisible =
+    scanning || (isARGeospatialSupported && !anchorsTrusted && hopeless && !noCoverageNoticeSeen);
 
   // Where the anchors are measured from.
   //
@@ -460,7 +506,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           different sources, and showing them together would read as a double
           image wherever the two disagreed, which is precisely where it would
           matter most. */}
-      {anchorsTrusted ? (
+      {anchorsTrusted && (
         <>
           <GroundChevrons anchors={projectedAnchors} color={T.green} />
           {/* Over the chevrons: the run leads to the pin, so the pin should
@@ -471,7 +517,13 @@ export function ARNavigationScreen({ route, navigation }: Props) {
             color={T.green}
           />
         </>
-      ) : (
+      )}
+
+      {/* The compass-drawn run, for when the anchored one is not coming: no
+          coverage here, no AR at all on this platform, or a scan that has gone
+          on long enough to stop being worth waiting for. Never *during* a
+          scan - see `scanning`. */}
+      {!anchorsTrusted && !scanning && (
         <GroundArrows
           bearingToNext={bearingToNext}
           metersToNext={metersToTarget}
@@ -487,7 +539,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           for something, so it must not sit under the thing it is asking about,
           and it must not bury the instruction or the way out of the route. */}
       <ScanPrompt
-        visible={Boolean(surface) && !anchorsTrusted}
+        visible={promptVisible}
         vpsAvailability={geospatial?.vpsAvailability}
         horizontalAccuracy={geospatial?.horizontalAccuracy}
         tracking={geospatial?.tracking}

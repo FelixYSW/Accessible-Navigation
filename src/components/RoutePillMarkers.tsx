@@ -159,7 +159,12 @@ function PillMarker({
 
 // True for a short window after `signature` changes, so the marker re-snapshots
 // its contents and then stops.
-const TRACKING_WINDOW_MS = 600;
+//
+// Generous rather than tight. The cost of being too long is a second of extra
+// snapshotting on a map that is usually still at that moment; the cost of being
+// too short is a marker that is permanently blank, because the map snapshots an
+// undrawn view and never revisits it. Those are not comparable failures.
+const TRACKING_WINDOW_MS = 1500;
 
 function useTrackingWindow(signature: string): boolean {
   const [tracking, setTracking] = useState(true);
