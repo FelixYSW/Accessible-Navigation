@@ -35,7 +35,7 @@ export const DEFAULT_CAMERA_PITCH_DEG = 30;
 // projects to a 2px sliver - correct, and useless. These four span roughly
 // 175px of screen at the front down to 60px at the back on a 402pt phone,
 // which reads as a receding run of large floor markings.
-const ARROW_DISTANCES_M = [1.8, 3.1, 4.6, 6.4];
+const ARROW_DISTANCES_M = [1.0, 2.2, 3.5, 5.0];
 
 // One chevron, in metres, in its own frame: +y is the way it points, x is
 // across the path. Matches the anchored chevrons exactly - the two treatments

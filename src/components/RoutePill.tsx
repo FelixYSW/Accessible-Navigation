@@ -11,12 +11,12 @@ interface RoutePillProps {
   onMeasure: (size: { width: number; height: number }) => void;
 }
 
-// The contents of a route's map marker: its travel time over its distance.
+// The contents of a route's pill: its travel time over its distance.
 //
-// Just the pill, with no positioning of its own - it is rendered inside a
-// `<Marker>`, so the map places it and the map handles the tap. It carries no
-// `Pressable` for that reason: touches on a marker are dispatched natively and
-// would not reach a JS-side press target inside it.
+// Just the pill, with no positioning and no press handling of its own. Both
+// belong to RoutePillOverlay, which projects it onto the map and wraps it in
+// the `Pressable` that selects the route - keeping this component to the one
+// job of looking right at whatever text size the user has chosen.
 export function RoutePill({ duration, distance, selected, onMeasure }: RoutePillProps) {
   const { T, F } = useTheme();
 

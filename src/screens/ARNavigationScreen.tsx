@@ -70,9 +70,21 @@ const BANNER_TOP_GAP = 4;
 // anywhere between the lead distance and one spacing beyond it - at 2m spacing
 // that meant the first chevron could be three and a half metres off, which
 // reads as the run starting somewhere up the street rather than at your feet.
-const ANCHOR_SPACING_M = 1.5;
-const ANCHOR_LEAD_M = 1.2;
-const ANCHOR_HORIZON_M = 12;
+const ANCHOR_SPACING_M = 1.2;
+const ANCHOR_LEAD_M = 0.8;
+const ANCHOR_HORIZON_M = 10;
+
+// How far *behind* the walker's position along the route to start looking for
+// anchors, before filtering by true distance.
+//
+// Rounding a corner is why this exists. The walker's place on the route is
+// found by projecting them onto it, and on the outside of a turn that
+// projection sticks to the corner vertex while they keep moving - so measuring
+// the run from it leaves the nearest chevron several metres ahead just as they
+// need it most. Reaching back a little and then filtering on real distance
+// closes that gap. On a straight stretch the extra points fall behind the
+// camera and are never drawn.
+const ANCHOR_LOOKBACK_M = 2.5;
 
 // How far the run may be shifted sideways to sit under the walker, and how much
 // that shift has to change before it is worth re-planting the anchors.
@@ -349,7 +361,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     if (!anchorOrigin) return [];
 
     const along = distanceAlongRoute(walkingRoute.coordinates, anchorOrigin);
-    const first = Math.ceil((along + ANCHOR_LEAD_M) / ANCHOR_SPACING_M);
+    const first = Math.ceil((along - ANCHOR_LOOKBACK_M) / ANCHOR_SPACING_M);
     const last = Math.floor((along + ANCHOR_HORIZON_M) / ANCHOR_SPACING_M);
     const shift = offsetKeyFor(pathOffset) * OFFSET_ID_STRIDE;
 
@@ -363,6 +375,11 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       // Undefined means the route has run out, so the run of chevrons stops at
       // the destination instead of pointing past it.
       if (!point) break;
+
+      // Measured from the walker, not along the route. A chevron under their
+      // own feet is not guidance, and around a corner the two distances differ
+      // by several metres.
+      if (distanceMeters(anchorOrigin, point) < ANCHOR_LEAD_M) continue;
 
       planted.push({ id: index + shift, latitude: point.latitude, longitude: point.longitude });
     }

@@ -39,8 +39,11 @@ import {
   hasAccessibleRoutingKey,
   NoAccessibleRouteError,
 } from '../services/accessibleRouting';
-import { RoutePillMarkers } from '../components/RoutePillMarkers';
-import type { RoutePillDescriptor } from '../components/RoutePillMarkers';
+import { RoutePillOverlay } from '../components/RoutePillOverlay';
+import type {
+  RoutePillDescriptor,
+  RoutePillOverlayHandle,
+} from '../components/RoutePillOverlay';
 import type { MapRegion } from '../utils/geo';
 import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN, type Palette } from '../theme/tokens';
@@ -110,6 +113,10 @@ type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 export function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const inputRef = useRef<TextInput>(null);
+  // The pill layer is fed the region imperatively on every frame of a pan, so
+  // that tracking the map costs a re-render of four pills rather than of this
+  // whole screen and every polyline on it.
+  const pillLayerRef = useRef<RoutePillOverlayHandle>(null);
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<MapNavigation>();
   const { T, F, scaled, darkMode, mobilityAid } = useSettings();
@@ -682,10 +689,15 @@ export function MapScreen() {
         // without it, framing a route would immediately count as the user
         // panning away. It is reported by the Google provider, which this map
         // always uses.
-        onRegionChange={(_, details) => {
+        onRegionChange={(r, details) => {
+          // Every frame of a pan, and of the screen's own camera animations.
+          // This is what keeps the pills on their roads while the map moves;
+          // it deliberately does not touch state.
+          pillLayerRef.current?.setRegion(r);
           if (details?.isGesture) setFollowing(false);
         }}
         onRegionChangeComplete={(r, details) => {
+          pillLayerRef.current?.setRegion(r);
           setRegion(r);
           if (details?.isGesture) setFollowing(false);
         }}
@@ -747,17 +759,21 @@ export function MapScreen() {
             <Marker coordinate={selectedRoute.destination} title={selectedRoute.destinationName} />
           </>
         )}
-
-        {/* Map children, so the map moves them itself and each pill stays on
-            its own bit of road while the map is dragged. */}
-        <RoutePillMarkers
-          pills={pills}
-          selectedIndex={selectedRouteIndex}
-          onSelect={setSelectedRouteIndex}
-          region={region}
-          size={mapSize}
-        />
       </MapView>
+
+      {/* Drawn over the map rather than inside it. A marker carrying React
+          children does not survive this project's New Architecture build - see
+          the note in RoutePillOverlay. Sits here, immediately after the map, so
+          it covers the basemap but stays under the search bar and route
+          panel below. */}
+      <RoutePillOverlay
+        ref={pillLayerRef}
+        pills={pills}
+        selectedIndex={selectedRouteIndex}
+        onSelect={setSelectedRouteIndex}
+        region={region}
+        size={mapSize}
+      />
 
       {/* Offered only once the map has actually been moved off its home - on
           an already-centred map it would be a control that does nothing. What
