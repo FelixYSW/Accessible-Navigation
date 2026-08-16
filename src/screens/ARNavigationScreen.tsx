@@ -491,11 +491,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // Rescaled to the pace implied by the Mobility aid setting, so the time
   // left here matches the estimate the user chose this route on.
   const remainingSeconds =
-    routeDurationSeconds(
-      walkingRoute.durationSeconds,
-      mobilityAid,
-      Boolean(walkingRoute.accessibleFor),
-    ) *
+    routeDurationSeconds(walkingRoute.durationSeconds, mobilityAid, walkingRoute.accessibleFor) *
     (1 - progress);
 
   const exit = () => navigation.goBack();

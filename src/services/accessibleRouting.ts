@@ -1,19 +1,54 @@
 import Constants from 'expo-constants';
-import type { LatLng, RouteStep, WalkingRoute } from '../types/route';
+import type { LatLng, RouteStep, RouteSurface, WalkingRoute } from '../types/route';
 import type { MobilityAid } from './mobility';
 
-// Accessibility-aware routing via OpenRouteService, which plans over
-// OpenStreetMap and can route *around* barriers rather than just reporting
-// them the way `accessibility.ts` does.
+// Walking routes via OpenRouteService, which plans over OpenStreetMap.
+//
+// This is the app's primary router for every user, not just those with a
+// mobility aid set. Google's Directions API only routes where it has a mapped
+// sidewalk, and in the Kuala Lumpur study area it very often hasn't: asked for
+// a 763m walk it has been observed returning three alternatives of 8.0, 8.5
+// and 10.0km, detouring miles around a road it would not cross. OSM carries
+// 14,601 footways in the same area. A pedestrian router is only as good as its
+// pedestrian network, and here that is decisively OSM's.
 //
 // ORS has exactly one accessibility profile - `wheelchair`. There is no cane
 // or walker profile, so the three aids are expressed as three restriction sets
 // over that one profile (below). That is a real modelling choice, not a
 // workaround: what differs between the three is how steep, how narrow and how
 // rough a path can be before it stops being usable.
-const ORS_ENDPOINT = 'https://api.openrouteservice.org/v2/directions/wheelchair/geojson';
+const ORS_BASE = 'https://api.openrouteservice.org/v2/directions';
 
 const REQUEST_TIMEOUT_MS = 20000;
+
+// How hard to push a walker with no aid away from big roads.
+//
+// `foot-walking` is the mirror image of Google's failing: where Google won't
+// route without a sidewalk, ORS will happily route along any way OSM does not
+// explicitly forbid pedestrians on - including a trunk-road shoulder. For an
+// app whose entire subject is safe walking, the shortest line down a highway
+// is not the right answer.
+//
+// `quiet` is ORS's own weighting for exactly this, biasing the route away from
+// big streets and onto the footways and residential roads beside them. It is a
+// preference and not a restriction, so a road with no alternative is still
+// used rather than the route failing - which is the behaviour wanted. Held
+// below 1.0 because at full strength it will take a long detour to avoid a
+// short stretch of main road.
+const QUIET_WEIGHTING = 0.8;
+
+// Alternatives, so the route picker has something to pick between. ORS only
+// offers these for two-point requests, which is all this app ever makes.
+//
+// `share_factor` is the most it may reuse of the fastest route, and
+// `weight_factor` the most it may cost - a low share and a high weight is what
+// produces genuinely different ways round rather than three variations on one
+// street.
+const ALTERNATIVE_ROUTES = {
+  target_count: 3,
+  share_factor: 0.6,
+  weight_factor: 1.6,
+};
 
 // The published limits each aid is designed around, and what can actually be
 // asked of the API.
@@ -111,17 +146,96 @@ const AID_ROUTING: Record<Exclude<MobilityAid, 'none'>, AidRouting> = {
 
 export class NoAccessibleRouteError extends Error {}
 
-// Whether accessibility-aware routing is configured at all. Without a key the
-// app falls back to Google routes plus OSM screening, so this is optional
-// rather than a hard requirement.
+// ORS refused the *request*, not the journey - an option it does not recognise
+// or support on this profile. Separated from every other failure because it is
+// the only one worth retrying with a simpler request: a timeout, a dead
+// network or a 500 will fail again just as slowly, and trying eight times
+// turns a ten-second failure into a minute of the user watching a spinner.
+class OrsRejectedError extends Error {}
+
+// Whether ORS is configured at all. Without a key the app falls back to
+// Google's Directions API - which still routes, and is still screened against
+// OSM afterwards. It just routes worse.
 export function hasAccessibleRoutingKey(): boolean {
   return Boolean(Constants.expoConfig?.extra?.openRouteServiceApiKey);
 }
 
-// Asks ORS for a route the given aid can actually use. Throws
-// `NoAccessibleRouteError` when ORS can route in general but can't find a path
-// meeting the restrictions - a real answer ("there is no accessible way"),
-// distinct from a network failure.
+// Every walking route ORS offers between two points, fastest first.
+//
+// The profile follows the aid: `wheelchair` for the three aids, restricted per
+// the table above, and `foot-walking` for someone with none. Routes planned on
+// the wheelchair profile are marked `accessibleFor`, which is what lets the UI
+// say "step-free route" about them without having to re-derive it.
+//
+// Throws `NoAccessibleRouteError` when ORS can route in general but finds
+// nothing meeting the restrictions - a real answer ("there is no accessible
+// way"), distinct from a network failure.
+export async function planRoutes(
+  origin: LatLng,
+  destination: LatLng,
+  destinationName: string,
+  aid: MobilityAid,
+  destinationAddress?: string,
+): Promise<WalkingRoute[]> {
+  const apiKey = Constants.expoConfig?.extra?.openRouteServiceApiKey as string | undefined;
+  if (!apiKey) throw new Error('OpenRouteService API key is not configured.');
+
+  const profile = aid === 'none' ? 'foot-walking' : 'wheelchair';
+  const accessibleFor = aid === 'none' ? undefined : aid;
+
+  let lastError: unknown;
+
+  for (const options of optionLadder(aid)) {
+    // Each set of options is tried with the way-type breakdown and then
+    // without it. `extra_info` is the one part of the request that cannot go
+    // in the ladder itself - it is a top-level field, not an option - and if a
+    // deployment refuses it there, every rung would fail and the whole app
+    // would fall silently back to Google. Dropping it costs the surface line
+    // on the route panel and nothing else, so it is worth losing to keep the
+    // route.
+    for (const withExtras of [true, false]) {
+      try {
+        const features = await requestRoutes(
+          apiKey,
+          profile,
+          origin,
+          destination,
+          options,
+          withExtras,
+        );
+        return features
+          .map((feature: any) =>
+            toRoute(
+              feature,
+              origin,
+              destination,
+              destinationName,
+              destinationAddress,
+              accessibleFor,
+            ),
+          )
+          .filter((route): route is WalkingRoute => route !== null)
+          .sort((a, b) => a.durationSeconds - b.durationSeconds);
+      } catch (error) {
+        // "No route" is ORS's answer, not its failure - a simpler request gets
+        // the same answer more slowly.
+        if (error instanceof NoAccessibleRouteError) throw error;
+        // Anything that is not a rejected parameter will fail again the same
+        // way. Stop rather than spend the user's time proving it.
+        if (!(error instanceof OrsRejectedError)) throw error;
+        lastError = error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('OpenRouteService could not plan a route.');
+}
+
+// A single accessible route, for the case where the routes on screen came from
+// Google rather than from ORS. Kept as its own entry point because the map
+// screen appends this one route to Google's set and says so.
 export async function findAccessibleRoute(
   origin: LatLng,
   destination: LatLng,
@@ -129,15 +243,57 @@ export async function findAccessibleRoute(
   aid: Exclude<MobilityAid, 'none'>,
   destinationAddress?: string,
 ): Promise<WalkingRoute> {
-  const apiKey = Constants.expoConfig?.extra?.openRouteServiceApiKey as string | undefined;
-  if (!apiKey) throw new Error('OpenRouteService API key is not configured.');
+  const routes = await planRoutes(origin, destination, destinationName, aid, destinationAddress);
+  if (routes.length === 0) throw new NoAccessibleRouteError('No accessible route found');
+  return routes[0];
+}
+
+// The request options to try, in order, stopping at the first that ORS
+// accepts.
+//
+// ORS rejects options it does not recognise with a 400 rather than ignoring
+// them, and which of these a given deployment accepts has moved between
+// versions - `alternative_routes` in particular is refused in combination with
+// some profile parameters. Degrading through the list means a rejected extra
+// costs one wasted request instead of the whole route.
+//
+// `avoid_features` is the one thing never dropped. Falling back to a route
+// with steps in it for a wheelchair user would be worse than no route at all,
+// because it would look exactly like a route that had been checked.
+function optionLadder(aid: MobilityAid): Record<string, unknown>[] {
+  if (aid === 'none') {
+    const quiet = { profile_params: { weightings: { quiet: QUIET_WEIGHTING } } };
+    return [
+      { ...quiet, alternative_routes: ALTERNATIVE_ROUTES },
+      quiet,
+      { alternative_routes: ALTERNATIVE_ROUTES },
+      {},
+    ];
+  }
 
   const { avoidSteps, restrictions } = AID_ROUTING[aid];
+  const avoid = avoidSteps ? { avoid_features: ['steps'] } : {};
+  return [
+    { ...avoid, profile_params: { restrictions }, alternative_routes: ALTERNATIVE_ROUTES },
+    { ...avoid, profile_params: { restrictions } },
+    { ...avoid, alternative_routes: ALTERNATIVE_ROUTES },
+    avoid,
+  ];
+}
+
+async function requestRoutes(
+  apiKey: string,
+  profile: string,
+  origin: LatLng,
+  destination: LatLng,
+  options: Record<string, unknown>,
+  withExtras: boolean,
+): Promise<any[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(ORS_ENDPOINT, {
+    const response = await fetch(`${ORS_BASE}/${profile}/geojson`, {
       method: 'POST',
       headers: {
         Authorization: apiKey,
@@ -149,15 +305,16 @@ export async function findAccessibleRoute(
           [origin.longitude, origin.latitude],
           [destination.longitude, destination.latitude],
         ],
-        // Asked for because the AR navigation banner names the street you are
-        // on and the one you are turning into. Costs a little response size on
-        // a request that is already slow; without it ORS returns geometry
-        // only and an accessible route would navigate with no street names.
+        // Asked for because the navigation banner names the street you are on
+        // and the one you are turning into. Costs a little response size on a
+        // request that is already slow; without it ORS returns geometry only
+        // and the walker navigates with no street names.
         instructions: true,
-        options: {
-          ...(avoidSteps ? { avoid_features: ['steps'] } : {}),
-          profile_params: { restrictions },
-        },
+        // The per-way breakdown behind `RouteSurface` - what tells a walker
+        // whether the short route is short because it runs down the side of a
+        // main road.
+        ...(withExtras ? { extra_info: ['waytype'] } : {}),
+        ...(Object.keys(options).length > 0 ? { options } : {}),
       }),
       signal: controller.signal,
     });
@@ -166,54 +323,136 @@ export async function findAccessibleRoute(
 
     if (!response.ok) {
       // 2009/2010 are ORS's "route could not be found" codes - the honest
-      // answer that no accessible path exists, not a fault.
+      // answer that no path exists, not a fault.
       const code = data?.error?.code;
       if (code === 2009 || code === 2010) {
         throw new NoAccessibleRouteError('No accessible route found');
       }
+      if (response.status === 400) {
+        throw new OrsRejectedError(`OpenRouteService rejected the request (${code ?? 400})`);
+      }
       throw new Error(`OpenRouteService returned ${response.status}`);
     }
 
-    const feature = data?.features?.[0];
-    if (!feature?.geometry?.coordinates?.length) {
+    const features = data?.features;
+    if (!Array.isArray(features) || features.length === 0) {
       throw new NoAccessibleRouteError('No accessible route found');
     }
-
-    const coordinates: LatLng[] = feature.geometry.coordinates.map(
-      ([longitude, latitude]: [number, number]) => ({ latitude, longitude }),
-    );
-
-    return {
-      origin,
-      destination,
-      destinationName,
-      destinationAddress,
-      coordinates,
-      // ORS words its steps differently from Google's and indexes them into
-      // the coordinate array rather than carrying their own geometry, so they
-      // are mapped here instead of being left empty - a wheelchair user
-      // following the accessible route should get the same street-by-street
-      // banner as everyone else, not a blank one.
-      steps: parseSteps(feature.properties?.segments, coordinates),
-      distanceMeters: feature.properties?.summary?.distance ?? 0,
-      durationSeconds: feature.properties?.summary?.duration ?? 0,
-      accessibleFor: aid,
-    };
+    return features;
   } finally {
     clearTimeout(timeout);
   }
 }
+
+// One GeoJSON feature to a route. Null for a feature carrying no geometry,
+// which ORS occasionally returns alongside good ones in an alternatives
+// response rather than omitting.
+function toRoute(
+  feature: any,
+  origin: LatLng,
+  destination: LatLng,
+  destinationName: string,
+  destinationAddress: string | undefined,
+  accessibleFor: Exclude<MobilityAid, 'none'> | undefined,
+): WalkingRoute | null {
+  if (!feature?.geometry?.coordinates?.length) return null;
+
+  const coordinates: LatLng[] = feature.geometry.coordinates.map(
+    ([longitude, latitude]: [number, number]) => ({ latitude, longitude }),
+  );
+  const steps = parseSteps(feature.properties?.segments, coordinates);
+
+  return {
+    origin,
+    destination,
+    destinationName,
+    destinationAddress,
+    coordinates,
+    steps,
+    distanceMeters: feature.properties?.summary?.distance ?? 0,
+    durationSeconds: feature.properties?.summary?.duration ?? 0,
+    summary: summarise(steps),
+    surface: parseSurface(feature.properties?.extras),
+    ...(accessibleFor ? { accessibleFor } : {}),
+  };
+}
+
+// ORS's `waytype` codes. Only the ones that change the answer are named; the
+// rest fall through to `otherMeters`.
+//
+//   0 unknown   1 state road   2 road       3 street    4 path
+//   5 track     6 cycleway     7 footway    8 steps     9 ferry
+//   10 construction
+const PEDESTRIAN_WAYTYPES = new Set([4, 6, 7, 8]);
+const ROAD_WAYTYPES = new Set([1, 2, 3]);
+
+// The `waytype` extra, totalled into the three buckets the UI reports.
+//
+// Read from ORS's own `summary` rather than from the per-segment `values`
+// array: the summary already carries a distance per way type, and rebuilding
+// those from segment indices would mean re-measuring the geometry to get an
+// answer ORS has already computed.
+function parseSurface(extras: any): RouteSurface | undefined {
+  const summary = extras?.waytype?.summary;
+  if (!Array.isArray(summary) || summary.length === 0) return undefined;
+
+  let footwayMeters = 0;
+  let roadMeters = 0;
+  let otherMeters = 0;
+
+  for (const entry of summary) {
+    const distance = typeof entry?.distance === 'number' ? entry.distance : 0;
+    if (PEDESTRIAN_WAYTYPES.has(entry?.value)) footwayMeters += distance;
+    else if (ROAD_WAYTYPES.has(entry?.value)) roadMeters += distance;
+    else otherMeters += distance;
+  }
+
+  return { footwayMeters, roadMeters, otherMeters };
+}
+
+// A short label for the streets a route mostly follows, used by the picker to
+// tell otherwise-similar alternatives apart. Google supplies one; ORS does
+// not, so the longest named step stands in - which is the same thing Google's
+// summary usually turns out to be.
+function summarise(steps: RouteStep[]): string | undefined {
+  let longest: RouteStep | undefined;
+  for (const step of steps) {
+    if (!step.road) continue;
+    if (!longest || step.distanceMeters > longest.distanceMeters) longest = step;
+  }
+  return longest?.road;
+}
+
+// ORS's numeric manoeuvre codes, translated into the string codes Google's
+// Directions API uses - so that `maneuverFromApi` stays the single place that
+// decides which arrow to draw, and neither caller has to know where its route
+// came from.
+//
+// Only the codes with an exact Google equivalent are mapped. The rest are
+// deliberately absent, which leaves the banner falling back to the turn angle
+// it measures from the geometry: roundabouts (7, 8) because a roundabout on
+// foot is walked round as an ordinary turn of whatever angle it happens to be,
+// U-turns (9) because ORS does not say which way round, and depart/arrive
+// (11, 10) because they are not manoeuvres. Every one of those is better
+// served by the measured angle than by a guess, and a guess here draws a
+// left-turn arrow on a right turn.
+const ORS_MANEUVERS: Record<number, string> = {
+  0: 'turn-left',
+  1: 'turn-right',
+  2: 'turn-sharp-left',
+  3: 'turn-sharp-right',
+  4: 'turn-slight-left',
+  5: 'turn-slight-right',
+  6: 'straight',
+  12: 'fork-left', // keep left
+  13: 'fork-right', // keep right
+};
 
 // ORS's turn-by-turn steps, mapped onto the same `RouteStep` shape Google's
 // are. Two differences it has to bridge: the road name arrives as its own
 // field (as "-" when the way is unnamed) rather than being buried in the
 // instruction text, and each step points at the shared coordinate array by
 // index instead of carrying its own start and end.
-//
-// `maneuver` is deliberately left unset. ORS reports the manoeuvre as a
-// numeric type code from a different vocabulary to Google's, and a wrong
-// mapping would put a left-turn arrow on a right turn - worse than the banner
-// falling back to the bearing it computes itself.
 function parseSteps(segments: any, coordinates: LatLng[]): RouteStep[] {
   if (!Array.isArray(segments)) return [];
 
@@ -224,6 +463,7 @@ function parseSteps(segments: any, coordinates: LatLng[]): RouteStep[] {
       return {
         instruction: step.instruction ?? '',
         road,
+        maneuver: typeof step.type === 'number' ? ORS_MANEUVERS[step.type] : undefined,
         distanceMeters: step.distance ?? 0,
         start: coordinates[clampIndex(startIndex, coordinates)],
         end: coordinates[clampIndex(endIndex, coordinates)],

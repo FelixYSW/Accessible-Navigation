@@ -41,23 +41,34 @@ export const MOBILITY_AID_LABELS: Record<MobilityAid, string> = {
 // `MOBILITY_AID_SPEED_MPS` if a speed is ever retuned.
 export const MOBILITY_AIDS: MobilityAid[] = ['none', 'wheelchair', 'cane', 'walker'];
 
-// Rescales a Google walking duration to the user's own pace. `none` leaves it
-// exactly as Google returned it.
-export function adjustDurationForAid(durationSeconds: number, aid: MobilityAid): number {
-  return durationSeconds * (GOOGLE_WALKING_SPEED_MPS / MOBILITY_AID_SPEED_MPS[aid]);
-}
+// The pace OpenRouteService's wheelchair profile assumes, in m/s - its own
+// default base speed of 4 km/h.
+const ORS_WHEELCHAIR_SPEED_MPS = 1.11;
 
-// The duration to show for a route, whichever router produced it.
+// The duration to show for a route, whichever router produced it and whichever
+// profile it was planned on.
 //
-// Only Google's durations need rescaling. OpenRouteService's wheelchair
-// profile applies its own pace model, so putting the multiplier on top of that
-// would charge the user for the same slowdown twice.
+// Both inputs matter, and conflating them was a real error. A route planned on
+// ORS's wheelchair profile arrives already paced - but paced for a wheelchair,
+// which is only the right answer for one of the three aids that use that
+// profile. Treating "came back accessible" as "needs no rescaling" left a
+// walker, who travels at 0.65 m/s, reading times computed at 1.11 - a journey
+// shown as half an hour that takes the better part of an hour.
+//
+// So the router's own pace is used only as the baseline it actually is, and
+// every duration the app shows is expressed in the aid's speed from the table
+// above.
 export function routeDurationSeconds(
   durationSeconds: number,
   aid: MobilityAid,
-  alreadyPaced: boolean,
+  /** The aid this route was planned for, if it came from ORS's wheelchair
+   *  profile. Undefined for Google's routes and for ORS's foot-walking ones,
+   *  which are both paced for an unaided walker. */
+  plannedFor: MobilityAid | undefined,
 ): number {
-  return alreadyPaced ? durationSeconds : adjustDurationForAid(durationSeconds, aid);
+  const routerSpeed =
+    plannedFor && plannedFor !== 'none' ? ORS_WHEELCHAIR_SPEED_MPS : GOOGLE_WALKING_SPEED_MPS;
+  return durationSeconds * (routerSpeed / MOBILITY_AID_SPEED_MPS[aid]);
 }
 
 // One short line under the control in Settings, so the setting visibly does

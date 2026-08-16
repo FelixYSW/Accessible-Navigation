@@ -17,14 +17,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import type { LatLng, PlaceSuggestion, WalkingRoute } from '../types/route';
+import type { LatLng, PlaceSuggestion, RouteSurface, WalkingRoute } from '../types/route';
 import {
   findPlace,
   getNearbyPlaces,
   getPlaceAutocomplete,
   getPlaceDetails,
-  getWalkingRoutes,
 } from '../services/directions';
+import { planWalkingRoutes } from '../services/routing';
 import { routeDurationSeconds, type MobilityAid } from '../services/mobility';
 import {
   needsAccessibilityCheck,
@@ -90,14 +90,22 @@ const ESTIMATED_PANEL_HEIGHT = 190;
 const ROUTE_MATCH_TOLERANCE_METERS = 30;
 const ROUTE_MATCH_THRESHOLD = 0.75;
 
-// Named per aid, because "step-free" is the wrong promise for a cane user -
-// their route is allowed to include steps and is chosen on gradient and
-// surface instead.
+// One sentence per aid, all built the same way: what the route guarantees,
+// then who it was planned for.
+//
+// The promise differs because the routing does. A cane route is allowed to
+// include steps - `avoidSteps` is false for it in `accessibleRouting.ts`,
+// since the standard is "short flights with continuous handrails" and that
+// condition can only be checked afterwards by the OSM screening, not asked of
+// the router. So it must not say "step-free", and the two that genuinely are
+// planned step-free must say so. What was wrong before was the shape: the same
+// fact arrived in a different grammatical form for each aid, which reads as
+// three unrelated statements rather than one comparable guarantee.
 const ACCESSIBLE_ROUTE_LABELS: Record<MobilityAid, string> = {
   none: '',
   wheelchair: 'Step-free route, planned for wheelchair access',
   walker: 'Step-free route, planned for walker access',
-  cane: 'Planned for even gradients and firm surfaces',
+  cane: 'Even gradients and firm surfaces, planned for cane access',
 };
 
 // Dot colour for each accessibility verdict. The two warning colours are the
@@ -107,6 +115,58 @@ const ACCESS_COLORS: Record<AccessibilitySeverity, (palette: Palette) => string>
   caution: () => HAZARD_COLORS['pathway-obstruction'],
   blocked: () => HAZARD_COLORS.pothole,
 };
+
+// How much road walking passes without comment.
+//
+// Some is unavoidable on any route here - a crossing, a stretch where the
+// pavement simply gives out for fifty metres - and flagging every one of those
+// would teach the walker to ignore the line entirely, which would cost them
+// the one that matters.
+const ROAD_WALKING_NOTICE_M = 50;
+
+// How much of the route has to be classified footway before the app is willing
+// to call it a footpath route.
+const FOOTWAY_CONFIDENCE = 0.6;
+
+// The share of road walking that turns the line from information into a
+// warning. Proportional rather than absolute, because 200m of road is nothing
+// on a 10km walk and a quarter of a 800m one - and a warning colour that shows
+// on every long route is decoration, not a warning.
+const ROAD_SHARE_CAUTION = 0.25;
+
+// What the way-type breakdown is worth saying out loud, if anything.
+//
+// Null is a real answer and the most important case to get right: where OSM
+// has classified too little of the route, there is nothing honest to report,
+// and "on footpaths the whole way" inferred from a handful of tagged segments
+// would be a guarantee the data cannot support. This app's whole subject is
+// people for whom a wrong guarantee is worse than no information.
+function surfaceNote(
+  surface: RouteSurface,
+): { text: string; severity: AccessibilitySeverity } | null {
+  const total = surface.footwayMeters + surface.roadMeters + surface.otherMeters;
+  if (total <= 0) return null;
+
+  if (surface.roadMeters <= ROAD_WALKING_NOTICE_M) {
+    if (surface.footwayMeters / total < FOOTWAY_CONFIDENCE) return null;
+    return {
+      text:
+        surface.roadMeters > 0
+          ? 'On footpaths almost the whole way'
+          : 'On footpaths the whole way',
+      severity: 'clear',
+    };
+  }
+
+  // Always carries the two figures rather than an adjective, so the walker
+  // makes the judgement themselves. Only the colour changes with severity.
+  return {
+    text: `${formatDistance(surface.roadMeters)} of ${formatDistance(
+      total,
+    )} shares the road with traffic`,
+    severity: surface.roadMeters / total > ROAD_SHARE_CAUTION ? 'caution' : 'clear',
+  };
+}
 
 type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 
@@ -126,6 +186,15 @@ export function MapScreen() {
 
   const [origin, setOrigin] = useState<LatLng | null>(null);
   const [query, setQuery] = useState('');
+  // The destination being previewed, held as state rather than routed to
+  // directly, because the routes depend on the mobility aid as well: ORS plans
+  // on a different profile for each, so changing the aid has to re-plan rather
+  // than just re-decorate what Google already returned.
+  const [preview, setPreview] = useState<{
+    location: LatLng;
+    name: string;
+    address?: string;
+  } | null>(null);
   const [routes, setRoutes] = useState<WalkingRoute[]>([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -194,11 +263,7 @@ export function MapScreen() {
   // walking pace to the pace implied by the user's Mobility aid setting.
   const durationForRoute = (walkingRoute: WalkingRoute) =>
     formatDuration(
-      routeDurationSeconds(
-        walkingRoute.durationSeconds,
-        mobilityAid,
-        Boolean(walkingRoute.accessibleFor),
-      ),
+      routeDurationSeconds(walkingRoute.durationSeconds, mobilityAid, walkingRoute.accessibleFor),
     );
 
   // The pills' content, computed here so the layer re-renders on a pan
@@ -212,7 +277,7 @@ export function MapScreen() {
           {
             coordinate,
             duration: formatDuration(
-              routeDurationSeconds(r.durationSeconds, mobilityAid, Boolean(r.accessibleFor)),
+              routeDurationSeconds(r.durationSeconds, mobilityAid, r.accessibleFor),
             ),
             distance: formatDistance(r.distanceMeters),
           },
@@ -455,6 +520,15 @@ export function MapScreen() {
 
     if (routes.length === 0 || mobilityAid === 'none' || !hasAccessibleRoutingKey()) return;
 
+    // Nothing to add when ORS planned these in the first place: every one of
+    // them already came off the wheelchair profile with this aid's
+    // restrictions applied, so asking again would return one of the routes
+    // already on screen. This only runs when the plan fell back to Google -
+    // and then it does real work, because it is the one thing that can still
+    // offer a way through that Google never mentioned, or say plainly that
+    // there isn't one.
+    if (routes[0].accessibleFor === mobilityAid) return;
+
     const reference = routes[0];
     let cancelled = false;
     setRoutingAccessible(true);
@@ -544,12 +618,23 @@ export function MapScreen() {
     };
   }, [routes, mobilityAid]);
 
-  const previewRoutes = async (
+  // Read by the planning effect below, which must not list `origin` as a
+  // dependency: it changes every 25m the user walks, and re-planning on it
+  // would throw away the routes they are in the middle of choosing between.
+  const originRef = useRef(origin);
+  originRef.current = origin;
+
+  // Picking a destination only records it. The routes themselves are planned
+  // by the effect below, because they depend on the mobility aid as much as on
+  // the destination - ORS plans on the wheelchair profile for an aid and on
+  // foot-walking without one, so changing the setting has to re-plan from
+  // scratch rather than annotate what is already on screen.
+  const previewRoutes = (
     destination: LatLng,
     destinationName: string,
     destinationAddress?: string,
   ) => {
-    if (!origin) {
+    if (!originRef.current) {
       showWarning(
         'Location not ready',
         'Still determining your current location, try again shortly.',
@@ -559,22 +644,41 @@ export function MapScreen() {
 
     setSuggestionsVisible(false);
     Keyboard.dismiss();
-    setLoading(true);
-    try {
-      const walkingRoutes = await getWalkingRoutes(
-        origin,
-        destination,
-        destinationName,
-        destinationAddress,
-      );
-      setRoutes(walkingRoutes);
-      setSelectedRouteIndex(0);
-    } catch (error) {
-      showWarning('Could not find route', error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
+    setPreview({ location: destination, name: destinationName, address: destinationAddress });
   };
+
+  useEffect(() => {
+    if (!preview) return;
+    const from = originRef.current;
+    if (!from) return;
+
+    let cancelled = false;
+    setLoading(true);
+
+    (async () => {
+      try {
+        const plan = await planWalkingRoutes(
+          from,
+          preview.location,
+          preview.name,
+          preview.address,
+          mobilityAid,
+        );
+        if (cancelled) return;
+        setRoutes(plan.routes);
+        setSelectedRouteIndex(0);
+      } catch (error) {
+        if (cancelled) return;
+        showWarning('Could not find route', error instanceof Error ? error.message : String(error));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [preview, mobilityAid]);
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -582,7 +686,7 @@ export function MapScreen() {
     Keyboard.dismiss();
     try {
       const place = await findPlace(query.trim());
-      await previewRoutes(place.location, place.name, place.address);
+      previewRoutes(place.location, place.name, place.address);
     } catch (error) {
       showWarning('Could not find route', error instanceof Error ? error.message : String(error));
     }
@@ -594,7 +698,7 @@ export function MapScreen() {
     Keyboard.dismiss();
     try {
       const place = await getPlaceDetails(suggestion.placeId);
-      await previewRoutes(place.location, place.name, place.address);
+      previewRoutes(place.location, place.name, place.address);
     } catch (error) {
       showWarning('Could not find route', error instanceof Error ? error.message : String(error));
     }
@@ -605,11 +709,16 @@ export function MapScreen() {
   // (via a suggestion or a submitted search), never stale text.
   const handleQueryChange = (text: string) => {
     setQuery(text);
+    // `preview` goes too, not just the routes it produced - left set, a change
+    // of mobility aid would re-plan a destination the user has already typed
+    // over and put the routes back.
+    if (preview) setPreview(null);
     if (routes.length > 0) setRoutes([]);
   };
 
   const handleClear = () => {
     setQuery('');
+    setPreview(null);
     setRoutes([]);
   };
 
@@ -658,6 +767,10 @@ export function MapScreen() {
   // route, or because ORS's route turned out to be this one of Google's.
   const selectedIsAccessible =
     Boolean(selectedRoute?.accessibleFor) || accessibleMatch === selectedRouteIndex;
+  // Shown for every aid including none - someone walking unaided is exactly
+  // who ends up on a road shoulder, since theirs is the only profile that
+  // permits one.
+  const selectedSurface = selectedRoute?.surface ? surfaceNote(selectedRoute.surface) : null;
 
   return (
     <View style={[styles.container, { backgroundColor: T.pageBg }]}>
@@ -980,9 +1093,23 @@ export function MapScreen() {
           {/* Shown only when a mobility aid is set, and only when OSM actually
               answered. A failed lookup says nothing at all - silence is the
               honest result, whereas "no barriers found" read as a guarantee is
-              exactly the failure this feature exists to prevent. */}
-          {!selectedIsAccessible &&
-            needsAccessibilityCheck(mobilityAid) &&
+              exactly the failure this feature exists to prevent.
+
+              This used to be hidden whenever the route came back
+              accessibility-planned, on the reasoning that a route planned
+              around the barriers outranks one merely inspected for them. That
+              stopped being true when ORS became the router for everyone: every
+              route is now accessibility-planned, so the condition hid the
+              screening from every user who had asked for it.
+
+              It is worst for a cane, and that is the case that shows why the
+              two lines are not redundant. `avoidSteps` is false for a cane, so
+              ORS is *permitted* to route over stairs - and the handrail and
+              flight-length checks that decide whether those stairs are
+              passable exist only here, in the screening. Hiding this line left
+              the one aid whose standard is conditional with nothing checking
+              the condition. */}
+          {needsAccessibilityCheck(mobilityAid) &&
             (screening ? (
               <Text style={[styles.routeAccess, { color: T.text2, fontSize: F.tinySm }]}>
                 Checking step-free access…
@@ -1005,6 +1132,21 @@ export function MapScreen() {
                 </View>
               )
             ))}
+
+          {/* What the route is made of. Sits below the accessibility verdict
+              because it qualifies it rather than replaces it: a route can be
+              perfectly step-free and still spend half a kilometre on the
+              carriageway, and those are two different questions. */}
+          {selectedSurface && (
+            <View style={styles.accessRow}>
+              <View
+                style={[accessDotSize, { backgroundColor: ACCESS_COLORS[selectedSurface.severity](T) }]}
+              />
+              <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
+                {selectedSurface.text}
+              </Text>
+            </View>
+          )}
 
           <Pressable
             style={[styles.startButton, { backgroundColor: T.green }]}
