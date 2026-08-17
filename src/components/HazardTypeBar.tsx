@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { ChevronDown, ChevronUp } from 'lucide-react-native';
 import { HAZARD_ICONS } from './hazardIcons';
+import { useToggleProgress } from './useToggleProgress';
 import { useSettings } from '../theme/SettingsContext';
 import { HAZARD_COLORS, OVERLAY_PILL_HEIGHT } from '../theme/tokens';
 import { HAZARD_CLASSES, HAZARD_COMPACT_LABELS, HAZARD_SETTING_LABELS } from '../types/hazard';
@@ -102,6 +103,11 @@ export function HazardTypeBar() {
 // The touch target is grown back out with `hitSlop` rather than by drawing
 // something bigger, so a small switch is still a comfortable thing to hit while
 // walking.
+//
+// The thumb slides and the track crossfades, both driven natively - see
+// `useToggleProgress` for why that is not optional on the AR screen. The
+// crossfade is two stacked layers rather than an interpolated colour because
+// `backgroundColor` cannot be driven off the JS thread.
 function MiniSwitch({
   value,
   onChange,
@@ -112,10 +118,12 @@ function MiniSwitch({
   label: string;
 }) {
   const { T, scaled } = useSettings();
+  const progress = useToggleProgress(value);
 
   const height = scaled(20);
   const width = scaled(34);
   const thumb = scaled(14);
+  const padding = 3;
 
   return (
     <Pressable
@@ -124,24 +132,36 @@ function MiniSwitch({
       accessibilityState={{ checked: value }}
       accessibilityLabel={label}
       hitSlop={10}
-      style={[
-        styles.track,
-        {
-          height,
-          width,
-          borderRadius: height / 2,
-          backgroundColor: value ? T.green : 'rgba(255,255,255,0.25)',
-          justifyContent: 'center',
-          alignItems: value ? 'flex-end' : 'flex-start',
-        },
-      ]}
+      style={{
+        height,
+        width,
+        borderRadius: height / 2,
+        padding,
+        justifyContent: 'center',
+        // The off colour, sitting under the on colour below.
+        backgroundColor: 'rgba(255,255,255,0.25)',
+      }}
     >
-      <View
+      <Animated.View
+        style={[
+          StyleSheet.absoluteFill,
+          { borderRadius: height / 2, backgroundColor: T.green, opacity: progress },
+        ]}
+      />
+      <Animated.View
         style={{
           height: thumb,
           width: thumb,
           borderRadius: thumb / 2,
           backgroundColor: '#fff',
+          transform: [
+            {
+              translateX: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, width - padding * 2 - thumb],
+              }),
+            },
+          ],
         }}
       />
     </Pressable>
@@ -187,5 +207,4 @@ const styles = StyleSheet.create({
   },
   rowLabel: { color: '#fff', fontWeight: '600', flex: 1 },
   headerLabel: { color: '#fff', fontWeight: '600', flexShrink: 1 },
-  track: { padding: 3 },
 });

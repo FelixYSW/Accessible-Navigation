@@ -103,8 +103,13 @@ export function SettingsScreen() {
             <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
               Spoken Turns
             </Text>
+            {/* Every subtitle in this section is a verb phrase describing what
+                the switch does, in the same shape: "Reads ... aloud", "Turns
+                ... on or off". They were a mix of that and bare noun phrases
+                ("Turn-by-turn directions read aloud"), which reads as three
+                unrelated notes rather than one set of switches. */}
             <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
-              Turn-by-turn directions read aloud
+              Reads turn-by-turn directions aloud
             </Text>
           </View>
           <Switch
@@ -121,7 +126,7 @@ export function SettingsScreen() {
               Hazard Cues
             </Text>
             <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
-              Spoken warning when a hazard is detected
+              Reads hazard warnings aloud as they are detected
             </Text>
           </View>
           <Switch
@@ -232,7 +237,7 @@ export function SettingsScreen() {
         <View style={[styles.row, styles.rowInline, styles.rowDivided, { borderBottomColor: T.sep }]}>
           <View style={styles.rowTextBlock}>
             <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
-              Detect hazards
+              Detect Hazards
             </Text>
             <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
               Turns every hazard type below on or off
@@ -241,28 +246,25 @@ export function SettingsScreen() {
           <Switch
             value={anyHazardActive}
             onValueChange={setAllHazards}
-            accessibilityLabel="Detect hazards"
+            accessibilityLabel="Detect Hazards"
             {...switchColors}
           />
         </View>
 
-        {HAZARD_CLASSES.map((hazardClass, index) => {
+        {HAZARD_CLASSES.map((hazardClass) => {
           const active = hazardActive[hazardClass];
           const color = HAZARD_COLORS[hazardClass];
           const Icon = HAZARD_ICONS[hazardClass];
           const label = HAZARD_SETTING_LABELS[hazardClass];
-          const last = index === HAZARD_CLASSES.length - 1;
 
           return (
-            <View
-              key={hazardClass}
-              style={[
-                styles.row,
-                styles.rowInline,
-                !last && styles.rowDivided,
-                { borderBottomColor: T.sep },
-              ]}
-            >
+            // No divider between these four. The one rule in the card sits
+            // under Detect Hazards, where it marks the boundary between the
+            // switch that governs and the switches it governs. Ruling between
+            // the four as well would give that line the same weight as a
+            // separator between peers, and the grouping it is drawing is the
+            // only thing worth saying with a line here.
+            <View key={hazardClass} style={[styles.row, styles.rowInline]}>
               <View style={styles.hazardRowLeft}>
                 <View
                   style={[

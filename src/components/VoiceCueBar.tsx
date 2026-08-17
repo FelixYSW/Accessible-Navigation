@@ -1,6 +1,7 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Volume2, VolumeX } from 'lucide-react-native';
+import { useToggleProgress } from './useToggleProgress';
 import { useSettings } from '../theme/SettingsContext';
 import { OVERLAY_GREEN, OVERLAY_PILL_HEIGHT, OVERLAY_RED } from '../theme/tokens';
 
@@ -52,7 +53,13 @@ function CueSegment({ cue }: { cue: VoiceCue }) {
   // it cannot be the only thing that carries it: red/green is the commonest
   // colour vision deficiency there is, and an app about accessibility is a poor
   // place to encode a control's state in exactly that pair.
-  const Icon = on ? Volume2 : VolumeX;
+  //
+  // The two are crossfaded rather than swapped. A hard swap of both glyph and
+  // colour in one frame is easy to miss on a screen you are glancing at while
+  // walking, and the fade is what makes it read as this control changing rather
+  // than as the screen having redrawn.
+  const progress = useToggleProgress(on);
+  const size = scaled(15);
 
   return (
     <Pressable
@@ -67,7 +74,21 @@ function CueSegment({ cue }: { cue: VoiceCue }) {
       accessibilityLabel={`${accessibility}, ${on ? 'on' : 'off'}`}
       hitSlop={6}
     >
-      <Icon size={scaled(15)} color={on ? OVERLAY_GREEN : OVERLAY_RED} strokeWidth={2.4} />
+      {/* Fixed box, so the two stacked glyphs cannot shift the label between
+          them as they fade. */}
+      <View style={{ height: size, width: size }}>
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
+          <Volume2 size={size} color={OVERLAY_GREEN} strokeWidth={2.4} />
+        </Animated.View>
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
+          ]}
+        >
+          <VolumeX size={size} color={OVERLAY_RED} strokeWidth={2.4} />
+        </Animated.View>
+      </View>
       <Text style={[styles.label, { fontSize: F.micro }]} numberOfLines={1}>
         {short}
       </Text>
