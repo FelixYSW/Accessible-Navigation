@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Volume2, VolumeX } from 'lucide-react-native';
 import { useSettings } from '../theme/SettingsContext';
-import { OVERLAY_GREEN, OVERLAY_RED } from '../theme/tokens';
+import { OVERLAY_GREEN, OVERLAY_PILL_HEIGHT, OVERLAY_RED } from '../theme/tokens';
 
 /** Which half of voice guidance a segment switches: the spoken turn-by-turn
  *  directions, or the spoken hazard warnings. */
@@ -57,7 +57,9 @@ function CueSegment({ cue }: { cue: VoiceCue }) {
   return (
     <Pressable
       onPress={() => set(!on)}
-      style={styles.segment}
+      // Shares its height with the hazard bar beside it, rather than taking one
+      // from its own padding - see OVERLAY_PILL_HEIGHT.
+      style={[styles.segment, { minHeight: scaled(OVERLAY_PILL_HEIGHT) }]}
       accessibilityRole="switch"
       accessibilityState={{ checked: on }}
       // Spells the state out, because the label beside the icon does not: it
@@ -95,7 +97,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    paddingVertical: 9,
+    // Vertical space comes from the shared minimum height, not from padding -
+    // padding here would stack on top of it and make this bar the taller of the
+    // two again.
+    paddingVertical: 4,
     paddingHorizontal: 14,
     flexShrink: 1,
   },

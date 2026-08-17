@@ -29,10 +29,18 @@ export const HAZARD_LABELS: Record<HazardClass, string> = {
 // Each of these is the distinguishing word of its full label rather than an
 // abbreviation of it - the full name is a tap away in Settings, and on camera
 // what the walker needs is to tell four rows apart at a glance.
+// `broken-tactile-paving` is called "Uneven surface" here rather than "Tactile
+// paving", and that is a correctness fix rather than a shortening. The detector
+// for this class was trained on RDD2022's cracking types (D00/D10/D20) - road
+// surface damage, not tactile paving. It will flag a cracked or broken pavement
+// and will not reliably recognise intact tactile paving as anything at all, so
+// a label promising the latter describes a capability the model does not have.
+// "Uneven surface" is the half of the Settings label ("Broken Tactile Paving /
+// Uneven Surface") that the training data actually supports.
 export const HAZARD_COMPACT_LABELS: Record<HazardClass, string> = {
   pothole: 'Pothole',
   'slippery-surface': 'Slippery',
-  'broken-tactile-paving': 'Tactile paving',
+  'broken-tactile-paving': 'Uneven surface',
   'pathway-obstruction': 'Obstruction',
 };
 

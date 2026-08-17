@@ -53,6 +53,15 @@ export const HAZARD_COLORS = {
 export const OVERLAY_GREEN = '#30D158';
 export const OVERLAY_RED = '#FF453A';
 
+// The height of a control pill on the camera screens, before text scaling.
+//
+// Shared rather than left to each component's padding, because the sound bar
+// and the hazard bar sit on the same row and hold different things - a line of
+// text in one, a switch and a chevron in the other. Sized from their padding
+// they came out visibly different heights, and two controls side by side at
+// slightly different heights read as a mistake rather than as a distinction.
+export const OVERLAY_PILL_HEIGHT = 38;
+
 // Shape of a resolved theme, shared by both modes so screens can be written
 // against one set of semantic names.
 export interface Palette {

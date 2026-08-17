@@ -214,31 +214,28 @@ export function SettingsScreen() {
 
       <SectionLabel>Hazard types</SectionLabel>
 
-      {/* The master switch, deliberately not drawn as a fifth hazard row.
-          It governs the four below rather than sitting among them, so it takes
-          the idiom the rest of Settings uses for a plain preference - a full-
-          width card with a title and an explanatory line - while the four keep
-          the swatch-and-label idiom that marks a row as a hazard type. Given
-          the same treatment as them it read as a fifth type called "All", which
-          is exactly the wrong thing for a control that turns the others off.
+      {/* One card, divided, like Voice guidance above.
+          The master and the four it controls are one decision made in stages,
+          and separate cards read as separate subjects. What still marks the
+          master out is the row itself: a title and an explanatory line, against
+          the swatch-and-label the four use to say "this is a hazard type". It
+          must not read as a fifth type called "All".
 
-          It shows on when *anything* is being flagged, not only when all four
-          are: this gates detection, and with three of four types on the honest
-          answer to "is the app looking for hazards" is yes. Turning it off
-          silences everything; turning it back on restores all four rather than
-          the previous selection, which cannot be done without remembering a set
-          the user can no longer see - and the line below says so plainly rather
-          than letting them discover it. */}
+          The master shows on when *anything* is being flagged, not only when
+          all four are: it gates detection, and with three of four types on the
+          honest answer to "is the app looking for hazards" is yes. Turning it
+          off silences everything; turning it back on restores all four rather
+          than the previous selection, which cannot be done without remembering
+          a set the user can no longer see - and the line below says so rather
+          than letting them find out. */}
       <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
-        <View style={[styles.row, styles.rowInline]}>
+        <View style={[styles.row, styles.rowInline, styles.rowDivided, { borderBottomColor: T.sep }]}>
           <View style={styles.rowTextBlock}>
             <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
               Detect hazards
             </Text>
             <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
-              {anyHazardActive
-                ? 'Turn off to silence every type below'
-                : 'Turn on to enable all four types'}
+              Turns every hazard type below on or off
             </Text>
           </View>
           <Switch
@@ -248,18 +245,24 @@ export function SettingsScreen() {
             {...switchColors}
           />
         </View>
-      </View>
 
-      <View style={styles.hazardList}>
-
-        {HAZARD_CLASSES.map((hazardClass) => {
+        {HAZARD_CLASSES.map((hazardClass, index) => {
           const active = hazardActive[hazardClass];
           const color = HAZARD_COLORS[hazardClass];
           const Icon = HAZARD_ICONS[hazardClass];
           const label = HAZARD_SETTING_LABELS[hazardClass];
+          const last = index === HAZARD_CLASSES.length - 1;
 
           return (
-            <View key={hazardClass} style={[styles.hazardRow, { backgroundColor: T.card }]}>
+            <View
+              key={hazardClass}
+              style={[
+                styles.row,
+                styles.rowInline,
+                !last && styles.rowDivided,
+                { borderBottomColor: T.sep },
+              ]}
+            >
               <View style={styles.hazardRowLeft}>
                 <View
                   style={[
@@ -341,16 +344,6 @@ const styles = StyleSheet.create({
   },
   // Size and radius are set inline, from the Text Size multiplier.
   paceDot: { opacity: 0.45 },
-  hazardList: { gap: 8, paddingHorizontal: SCREEN_MARGIN, paddingBottom: 20 },
-  hazardRow: {
-    borderRadius: RADIUS.control,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
   hazardRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
   // Size and radius are set inline, from the Text Size multiplier.
   swatch: { alignItems: 'center', justifyContent: 'center' },
