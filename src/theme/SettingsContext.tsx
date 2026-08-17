@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { HazardClass } from '../types/hazard';
+import { HAZARD_CLASSES, type HazardClass } from '../types/hazard';
 import type { MobilityAid } from '../services/mobility';
 import {
   DARK_PALETTE,
@@ -68,6 +68,9 @@ interface SettingsValue extends Preferences {
   setHazardCues: (value: boolean) => void;
   setMobilityAid: (value: MobilityAid) => void;
   toggleHazard: (hazardClass: HazardClass) => void;
+  /** Sets every hazard type at once - the master switch behind the Settings
+   *  section header and the collapsed hazard pill on the camera screens. */
+  setAllHazards: (active: boolean) => void;
 }
 
 const SettingsContext = createContext<SettingsValue | null>(null);
@@ -149,6 +152,17 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
             ...current.hazardActive,
             [hazardClass]: !current.hazardActive[hazardClass],
           },
+        })),
+      setAllHazards: (active) =>
+        setPreferences((current) => ({
+          ...current,
+          // Rebuilt from HAZARD_CLASSES rather than by mapping the existing
+          // record, so a class added to the list later cannot be left out of
+          // "all" simply because a stored preference predates it.
+          hazardActive: HAZARD_CLASSES.reduce(
+            (all, hazardClass) => ({ ...all, [hazardClass]: active }),
+            {} as Record<HazardClass, boolean>,
+          ),
         })),
     };
   }, [preferences, ready]);

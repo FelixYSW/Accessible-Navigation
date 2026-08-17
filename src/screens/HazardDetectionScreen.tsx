@@ -6,6 +6,7 @@ import { HazardCameraView, isARGeospatialSupported } from '../../modules/ar-geos
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { HazardIntro } from '../components/HazardIntro';
+import { HazardTypeBar } from '../components/HazardTypeBar';
 import { VoiceCueBar } from '../components/VoiceCueBar';
 import { useSettings } from '../theme/SettingsContext';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -25,16 +26,6 @@ export function HazardDetectionScreen() {
     [hazardActive],
   );
 
-  // Only run the camera and the detector while this tab is on screen, so
-  // switching to Navigate or Settings releases the camera instead of holding
-  // it open in the background.
-  const { detections, error, onHazards } = useHazardDetections(isFocused, activeClasses);
-
-  // Silenced when the tab is not on screen, as well as by the preference: this
-  // screen stays mounted behind the others, and a backgrounded camera calling
-  // out potholes would be baffling.
-  useSpokenHazardCues(hazardCues && isFocused, detections);
-
   // The intro card, back on every visit to the tab.
   //
   // Keyed on focus rather than on mount for the same reason the detector is:
@@ -44,6 +35,21 @@ export function HazardDetectionScreen() {
   useEffect(() => {
     if (isFocused) setIntroVisible(true);
   }, [isFocused]);
+
+  // Scanning begins when the user says so, not when the tab opens.
+  //
+  // The camera itself still starts on focus - the intro dims rather than
+  // covers, and a card floating on a black rectangle would look broken - but
+  // nothing is flagged until "Start scanning" is pressed. Boxes appearing over
+  // an overlay that is still explaining what boxes are is the wrong order to
+  // teach someone anything in.
+  const scanning = isFocused && !introVisible;
+  const { detections, error, onHazards } = useHazardDetections(scanning, activeClasses);
+
+  // Silenced when the tab is not on screen, as well as by the preference: this
+  // screen stays mounted behind the others, and a backgrounded camera calling
+  // out potholes would be baffling.
+  useSpokenHazardCues(hazardCues && scanning, detections);
 
   // The camera that also runs the model. Same detector as AR Navigation, minus
   // the AR session that screen needs and this one does not.
@@ -60,6 +66,7 @@ export function HazardDetectionScreen() {
       <HazardOverlay detections={detections} />
 
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
+        <HazardTypeBar />
         {/* Only the hazard half here: there is no route on this screen, so
             there are no turns to speak. Spoken turn cues stay whatever the
             user last set them to. */}
@@ -99,11 +106,11 @@ const styles = StyleSheet.create({
     left: SCREEN_MARGIN,
     right: SCREEN_MARGIN,
     flexDirection: 'row',
-    alignItems: 'center',
-    // flex-end, not space-between. With the scanning pill gone this row has a
-    // single child, and space-between packs a lone item against the *start* -
-    // which would have quietly parked the sound bar on the left.
-    justifyContent: 'flex-end',
+    // Top-aligned, not centred: the hazard pill grows downwards when its
+    // dropdown opens, and centring would slide the sound bar down the screen
+    // with it.
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
     gap: 8,
   },
   sheet: {

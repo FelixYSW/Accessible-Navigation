@@ -21,6 +21,21 @@ export const HAZARD_LABELS: Record<HazardClass, string> = {
   'pathway-obstruction': 'Pathway Obstruction',
 };
 
+// Labels for the hazard-type pill on the camera screens, which is a dropdown
+// roughly a third of the screen wide with a switch on every row. Even the
+// "short" labels above wrap to two lines in it at the larger Text Sizes, and a
+// wrapped row makes the run of switches beside them stop lining up.
+//
+// Each of these is the distinguishing word of its full label rather than an
+// abbreviation of it - the full name is a tap away in Settings, and on camera
+// what the walker needs is to tell four rows apart at a glance.
+export const HAZARD_COMPACT_LABELS: Record<HazardClass, string> = {
+  pothole: 'Pothole',
+  'slippery-surface': 'Slippery',
+  'broken-tactile-paving': 'Tactile paving',
+  'pathway-obstruction': 'Obstruction',
+};
+
 // Full labels for the Settings rows. Broken tactile paving and a generally
 // uneven surface are the same hazard class to the detector and call for the
 // same avoidance behaviour, so they are presented as a single preference

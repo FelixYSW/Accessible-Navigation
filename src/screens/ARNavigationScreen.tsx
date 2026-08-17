@@ -41,6 +41,7 @@ import {
 import { HazardOverlay } from '../components/HazardOverlay';
 import { ScanPrompt } from '../components/ScanPrompt';
 import { VoiceCueBar } from '../components/VoiceCueBar';
+import { HazardTypeBar } from '../components/HazardTypeBar';
 import { useSettings } from '../theme/SettingsContext';
 import { routeDurationSeconds } from '../services/mobility';
 import { OVERLAY_GREEN, OVERLAY_RED, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -197,8 +198,6 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
     [hazardActive],
   );
-  // Fed by the AR view below, which runs the same model over ARKit's frames.
-  const { detections, onHazards } = useHazardDetections(true, activeClasses);
 
   useEffect(() => {
     let positionSubscription: Location.LocationSubscription | undefined;
@@ -308,6 +307,24 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     isARGeospatialSupported && !anchorsTrusted && !hopeless && !scanAbandoned;
   const promptVisible =
     scanning || (isARGeospatialSupported && !anchorsTrusted && hopeless && !noCoverageNoticeSeen);
+
+  // Nothing is drawn over the camera while the scan prompt is up.
+  //
+  // The prompt asks the user to point the phone at the buildings around them.
+  // Chevrons on the pavement and boxes round potholes are both answers to a
+  // different question - "where do I walk" - and putting them on screen while
+  // the app is still asking for something contradicts the request and buries
+  // the thing that is being asked about.
+  //
+  // Keyed on the prompt being *visible*, not on `scanning`. The two differ in
+  // the case that matters: where there is no Street View coverage, scanning has
+  // already given up but the prompt stays up for a few seconds to say so, and
+  // guidance appearing under that notice while it explains why guidance is
+  // approximate is the wrong order to say two things in.
+  const guiding = !promptVisible;
+
+  // Fed by the AR view below, which runs the same model over ARKit's frames.
+  const { detections, onHazards } = useHazardDetections(guiding, activeClasses);
 
   // Where the anchors are measured from.
   //
@@ -484,7 +501,11 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     metersToManeuver,
     stepIndex,
   });
-  useSpokenHazardCues(hazardCues, detections);
+  // Silent while the prompt is up as well, so a hazard is not called out over
+  // an instruction to scan. `detections` is already empty then, but saying so
+  // here keeps the spoken and the drawn guidance switching on together rather
+  // than one depending on the other staying empty.
+  useSpokenHazardCues(hazardCues && guiding, detections);
 
   const progress = useTripProgress(walkingRoute, position);
   const remainingMeters = walkingRoute.distanceMeters * (1 - progress);
@@ -518,7 +539,12 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           One of the two, never both - they draw the same run of chevrons from
           different sources, and showing them together would read as a double
           image wherever the two disagreed, which is precisely where it would
-          matter most. */}
+          matter most.
+
+          No `guiding` check here, unlike the compass run below: both halves of
+          `promptVisible` require `!anchorsTrusted`, so the prompt cannot be up
+          at the same moment these are drawn. Adding the condition would read as
+          a case that can happen. */}
       {anchorsTrusted && (
         <>
           <GroundChevrons anchors={projectedAnchors} color={T.green} />
@@ -534,9 +560,9 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
       {/* The compass-drawn run, for when the anchored one is not coming: no
           coverage here, no AR at all on this platform, or a scan that has gone
-          on long enough to stop being worth waiting for. Never *during* a
-          scan - see `scanning`. */}
-      {!anchorsTrusted && !scanning && (
+          on long enough to stop being worth waiting for. Never while the prompt
+          is up - see `guiding`. */}
+      {!anchorsTrusted && guiding && (
         <GroundArrows
           bearingToNext={bearingToNext}
           metersToNext={metersToTarget}
@@ -566,6 +592,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           exit control up here was a redundant way to lose the route. Both cue
           types are live on a route, so both get a pill. */}
       <View style={[styles.topRow, { top: insets.top + BANNER_TOP_GAP + bannerHeight + 8 }]}>
+        <HazardTypeBar />
         <VoiceCueBar cues={['turns', 'hazards']} />
       </View>
 
@@ -714,8 +741,10 @@ const styles = StyleSheet.create({
     left: SCREEN_MARGIN,
     right: SCREEN_MARGIN,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
+    // Top-aligned, so opening the hazard dropdown grows it downwards over the
+    // camera rather than dragging the sound bar down beside it.
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
     gap: 8,
   },
   banner: {

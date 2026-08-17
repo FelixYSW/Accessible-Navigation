@@ -49,7 +49,10 @@ export function SettingsScreen() {
     setHazardCues,
     setMobilityAid,
     toggleHazard,
+    setAllHazards,
   } = useSettings();
+
+  const anyHazardActive = HAZARD_CLASSES.some((hazardClass) => hazardActive[hazardClass]);
 
   // Shared across every switch on the screen, so the app's green reads the
   // same on all of them rather than each row picking its own.
@@ -210,7 +213,45 @@ export function SettingsScreen() {
       )}
 
       <SectionLabel>Hazard types</SectionLabel>
+
+      {/* The master switch, deliberately not drawn as a fifth hazard row.
+          It governs the four below rather than sitting among them, so it takes
+          the idiom the rest of Settings uses for a plain preference - a full-
+          width card with a title and an explanatory line - while the four keep
+          the swatch-and-label idiom that marks a row as a hazard type. Given
+          the same treatment as them it read as a fifth type called "All", which
+          is exactly the wrong thing for a control that turns the others off.
+
+          It shows on when *anything* is being flagged, not only when all four
+          are: this gates detection, and with three of four types on the honest
+          answer to "is the app looking for hazards" is yes. Turning it off
+          silences everything; turning it back on restores all four rather than
+          the previous selection, which cannot be done without remembering a set
+          the user can no longer see - and the line below says so plainly rather
+          than letting them discover it. */}
+      <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
+        <View style={[styles.row, styles.rowInline]}>
+          <View style={styles.rowTextBlock}>
+            <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
+              Detect hazards
+            </Text>
+            <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
+              {anyHazardActive
+                ? 'Turn off to silence every type below'
+                : 'Turn on to enable all four types'}
+            </Text>
+          </View>
+          <Switch
+            value={anyHazardActive}
+            onValueChange={setAllHazards}
+            accessibilityLabel="Detect hazards"
+            {...switchColors}
+          />
+        </View>
+      </View>
+
       <View style={styles.hazardList}>
+
         {HAZARD_CLASSES.map((hazardClass) => {
           const active = hazardActive[hazardClass];
           const color = HAZARD_COLORS[hazardClass];
