@@ -41,13 +41,28 @@ const QUIET_WEIGHTING = 0.8;
 // offers these for two-point requests, which is all this app ever makes.
 //
 // `share_factor` is the most it may reuse of the fastest route, and
-// `weight_factor` the most it may cost - a low share and a high weight is what
-// produces genuinely different ways round rather than three variations on one
-// street.
+// Both knobs are filters, and both were originally set too strict - which is
+// why most destinations came back with a single route where Google had been
+// offering three.
+//
+// `share_factor` is the most of the fastest route an alternative may reuse.
+// Lower demands a more distinct route, and therefore finds fewer: on a walk
+// that leaves and arrives along the same few streets, almost every real
+// alternative reuses more than 60% of the optimal one and is discarded. 0.8
+// keeps the requirement that alternatives differ somewhere meaningful while
+// accepting that they will share the ends.
+//
+// `weight_factor` is the most an alternative may cost relative to the fastest.
+// Higher admits longer ways round. 1.8 is deliberately generous, because for
+// this app a longer route is not automatically a worse one - the whole reason
+// for offering a choice is that the shortest way may be the one down the side
+// of a main road, and the walker is the one who should decide.
+//
+// `target_count` is at ORS's maximum of 3.
 const ALTERNATIVE_ROUTES = {
   target_count: 3,
-  share_factor: 0.6,
-  weight_factor: 1.6,
+  share_factor: 0.8,
+  weight_factor: 1.8,
 };
 
 // The published limits each aid is designed around, and what can actually be
@@ -223,6 +238,18 @@ export async function planRoutes(
         // Anything that is not a rejected parameter will fail again the same
         // way. Stop rather than spend the user's time proving it.
         if (!(error instanceof OrsRejectedError)) throw error;
+
+        // Logged because the ladder is otherwise silent, and its failures are
+        // indistinguishable from ordinary results. A rung that drops
+        // `alternative_routes` produces a single route - which looks exactly
+        // like a destination that genuinely has only one sensible way to it.
+        // Without this line there is no way to tell those apart from the
+        // outside, and the wrong one of the two was the reason the route
+        // picker looked broken.
+        console.warn(
+          `[routing] ORS refused ${Object.keys(options).join(', ') || 'the base request'}` +
+            `${withExtras ? ' +extra_info' : ''} - ${error.message}. Retrying simpler.`,
+        );
         lastError = error;
       }
     }

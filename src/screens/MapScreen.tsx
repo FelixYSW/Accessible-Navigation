@@ -168,6 +168,12 @@ function surfaceNote(
   };
 }
 
+// The panel's accessibility line: either a verdict with a coloured dot, or a
+// dotless line saying an answer is still on its way.
+type AccessLine =
+  | { kind: 'pending'; text: string }
+  | { kind: 'verdict'; text: string; severity: AccessibilitySeverity };
+
 type MapNavigation = NativeStackNavigationProp<RootStackParamList>;
 
 export function MapScreen() {
@@ -754,6 +760,35 @@ export function MapScreen() {
     }
   };
 
+  // The opening camera, issued a second time once the map has settled.
+  //
+  // The first camera command after mount is not reliably obeyed in full. The
+  // native map applies its own `initialRegion` at around the same moment, and
+  // when the two collide the centre survives while the zoom is discarded -
+  // which lands the user centred on themselves at the fallback region's
+  // city-wide zoom rather than at DEFAULT_ZOOM. Gating on `onMapReady`
+  // narrowed that window; it did not close it, because "ready" and "finished
+  // applying the initial region" are not the same instant.
+  //
+  // A settled region is the signal that they are. Re-issuing the same command
+  // then is a no-op in every case where the first one worked - it animates to
+  // a camera already in place - so this costs one redundant camera call at
+  // startup and nothing else.
+  //
+  // Fires once. Anything the user has done in the meantime outranks it: a
+  // gesture, a route preview, or having turned follow mode off all mean the
+  // camera is where they put it, and correcting the opening zoom at that point
+  // would be yanking the map out from under them.
+  const settledOnceRef = useRef(false);
+  const confirmOpeningZoom = (fromGesture: boolean) => {
+    if (settledOnceRef.current) return;
+    settledOnceRef.current = true;
+
+    if (fromGesture || previewing || !followingRef.current) return;
+    if (!hasCentredRef.current || !originRef.current) return;
+    centreOnUser(originRef.current);
+  };
+
   // The verdict dots on the route panel read as punctuation for the line of
   // text beside them, so they grow with it.
   const accessDotSize = {
@@ -771,6 +806,67 @@ export function MapScreen() {
   // who ends up on a road shoulder, since theirs is the only profile that
   // permits one.
   const selectedSurface = selectedRoute?.surface ? surfaceNote(selectedRoute.surface) : null;
+
+  // The single accessibility line for the panel.
+  //
+  // There used to be up to four of these stacked, and with ORS routing
+  // everyone they started appearing together and saying the same thing twice:
+  // "Step-free route, planned for wheelchair access" directly above "No steps
+  // or barriers reported on this route" is one fact wearing two hats, and the
+  // "Checking step-free access…" that preceded it made the panel visibly
+  // rearrange itself while being read. Three dots of varying colour is not
+  // three times the information.
+  //
+  // So they collapse to one line, picked by which has the most to say. The
+  // ordering is the point:
+  //
+  //   1. No accessible route at all - the strongest thing that can be said.
+  //   2. A barrier actually found on the route. This outranks how the route
+  //      was *planned*, because it is the more specific claim and the only one
+  //      that changes what the walker does. It is also the case where the two
+  //      sources disagree, and a disagreement must never be resolved in favour
+  //      of the reassuring half.
+  //   3. How it was planned, when nothing was found against it.
+  //   4. The screening's own all-clear, for routes that were never planned
+  //      around anything (the Google fallback).
+  //
+  // Pending states come last and only when there is nothing better to show,
+  // which is why the wheelchair case above no longer flickers through
+  // "Checking…": it has a true line to show from the first render, and the
+  // screening either confirms it silently or replaces it with a warning.
+  const screened = needsAccessibilityCheck(mobilityAid)
+    ? accessibility[selectedRouteIndex]
+    : undefined;
+
+  const accessLine = ((): AccessLine | null => {
+    if (noAccessibleRoute) {
+      return {
+        kind: 'verdict',
+        text: 'No fully accessible route found to here',
+        severity: 'caution',
+      };
+    }
+    if (screened && screened.severity !== 'clear') {
+      return { kind: 'verdict', text: screened.note, severity: screened.severity };
+    }
+    if (selectedIsAccessible) {
+      return {
+        kind: 'verdict',
+        text: ACCESSIBLE_ROUTE_LABELS[mobilityAid],
+        severity: 'clear',
+      };
+    }
+    if (screened) {
+      return { kind: 'verdict', text: screened.note, severity: screened.severity };
+    }
+    if (routingAccessible) {
+      return { kind: 'pending', text: 'Looking for an accessible route…' };
+    }
+    if (screening) {
+      return { kind: 'pending', text: 'Checking step-free access…' };
+    }
+    return null;
+  })();
 
   return (
     <View style={[styles.container, { backgroundColor: T.pageBg }]}>
@@ -813,6 +909,7 @@ export function MapScreen() {
           pillLayerRef.current?.setRegion(r);
           setRegion(r);
           if (details?.isGesture) setFollowing(false);
+          confirmOpeningZoom(details?.isGesture === true);
         }}
         onLayout={(e) => setMapSize(e.nativeEvent.layout)}
         initialRegion={
@@ -822,8 +919,18 @@ export function MapScreen() {
                 // Kuala Lumpur, the study area from the FYP field observation.
                 latitude: 3.139,
                 longitude: 101.6869,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
+                // Deliberately the same span as the located case, rather than
+                // the city-wide one this used to open on.
+                //
+                // This is the zoom that survives when the opening camera
+                // command loses its zoom component, so it is the zoom the user
+                // is left at when that goes wrong - and a walking-scale view of
+                // somewhere they are about to be moved away from is a far
+                // better thing to be stuck with than a city-wide one. It shows
+                // for the second or two before the first fix arrives either
+                // way, and a whole-city view of a city they may not even be in
+                // was never the more useful of the two.
+                ...DEFAULT_SPAN,
               }
         }
       >
@@ -1061,82 +1168,27 @@ export function MapScreen() {
             </Text>
           )}
 
-          {/* The accessibility-routed verdict outranks the screening line
-              below it: this route was planned around the barriers, rather
-              than merely inspected for them afterwards. */}
-          {selectedIsAccessible && (
-            <View style={styles.accessRow}>
-              <View style={[accessDotSize, { backgroundColor: T.green }]} />
-              <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
-                {ACCESSIBLE_ROUTE_LABELS[mobilityAid]}
-              </Text>
-            </View>
-          )}
-
-          {routingAccessible && (
-            <Text style={[styles.routeAccess, { color: T.text2, fontSize: F.tinySm }]}>
-              Looking for an accessible route…
-            </Text>
-          )}
-
-          {noAccessibleRoute && (
-            <View style={styles.accessRow}>
-              <View
-                style={[accessDotSize, { backgroundColor: HAZARD_COLORS['pathway-obstruction'] }]}
-              />
-              <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
-                No fully accessible route found to here
-              </Text>
-            </View>
-          )}
-
-          {/* Shown only when a mobility aid is set, and only when OSM actually
-              answered. A failed lookup says nothing at all - silence is the
-              honest result, whereas "no barriers found" read as a guarantee is
-              exactly the failure this feature exists to prevent.
-
-              This used to be hidden whenever the route came back
-              accessibility-planned, on the reasoning that a route planned
-              around the barriers outranks one merely inspected for them. That
-              stopped being true when ORS became the router for everyone: every
-              route is now accessibility-planned, so the condition hid the
-              screening from every user who had asked for it.
-
-              It is worst for a cane, and that is the case that shows why the
-              two lines are not redundant. `avoidSteps` is false for a cane, so
-              ORS is *permitted* to route over stairs - and the handrail and
-              flight-length checks that decide whether those stairs are
-              passable exist only here, in the screening. Hiding this line left
-              the one aid whose standard is conditional with nothing checking
-              the condition. */}
-          {needsAccessibilityCheck(mobilityAid) &&
-            (screening ? (
+          {/* One line, chosen from four possible sources - see `accessLine`. */}
+          {accessLine &&
+            (accessLine.kind === 'pending' ? (
               <Text style={[styles.routeAccess, { color: T.text2, fontSize: F.tinySm }]}>
-                Checking step-free access…
+                {accessLine.text}
               </Text>
             ) : (
-              accessibility[selectedRouteIndex] && (
-                <View style={styles.accessRow}>
-                  <View
-                    style={[
-                      accessDotSize,
-                      {
-                        backgroundColor:
-                          ACCESS_COLORS[accessibility[selectedRouteIndex]!.severity](T),
-                      },
-                    ]}
-                  />
-                  <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
-                    {accessibility[selectedRouteIndex]!.note}
-                  </Text>
-                </View>
-              )
+              <View style={styles.accessRow}>
+                <View
+                  style={[accessDotSize, { backgroundColor: ACCESS_COLORS[accessLine.severity](T) }]}
+                />
+                <Text style={{ color: T.text2, fontSize: F.tinySm, flex: 1 }}>
+                  {accessLine.text}
+                </Text>
+              </View>
             ))}
 
-          {/* What the route is made of. Sits below the accessibility verdict
-              because it qualifies it rather than replaces it: a route can be
-              perfectly step-free and still spend half a kilometre on the
-              carriageway, and those are two different questions. */}
+          {/* What the route is made of. A second line rather than part of the
+              one above, because it answers a genuinely different question: a
+              route can be perfectly step-free and still spend half its length
+              on the carriageway, and neither fact substitutes for the other. */}
           {selectedSurface && (
             <View style={styles.accessRow}>
               <View
