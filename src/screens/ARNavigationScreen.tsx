@@ -40,10 +40,10 @@ import {
 } from '../components/maneuverIcons';
 import { HazardOverlay } from '../components/HazardOverlay';
 import { ScanPrompt } from '../components/ScanPrompt';
-import { VoiceCuePill } from '../components/VoiceCuePill';
+import { VoiceCueBar } from '../components/VoiceCueBar';
 import { useSettings } from '../theme/SettingsContext';
 import { routeDurationSeconds } from '../services/mobility';
-import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
+import { OVERLAY_GREEN, OVERLAY_RED, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { formatDistance, formatDuration } from '../utils/format';
 
 const GOOGLE_MAPS_API_KEY =
@@ -566,8 +566,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           exit control up here was a redundant way to lose the route. Both cue
           types are live on a route, so both get a pill. */}
       <View style={[styles.topRow, { top: insets.top + BANNER_TOP_GAP + bannerHeight + 8 }]}>
-        <VoiceCuePill cue="turns" />
-        <VoiceCuePill cue="hazards" />
+        <VoiceCueBar cues={['turns', 'hazards']} />
       </View>
 
       {/* Laid out the way a turn-by-turn banner is: the manoeuvre arrow, then
@@ -595,7 +594,26 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      <View style={[styles.sheet, { bottom: insets.bottom > 0 ? insets.bottom : 32 }]}>
+      {/* Progress is the bar itself rather than a rule under it.
+
+          A 5px track is a detail you have to look for; a bar that fills up as
+          you walk is read peripherally, which is the only way it will ever be
+          read by someone doing the thing it measures. It also frees the
+          vertical space the track and its margin were using, so the bar is
+          shorter while saying more.
+
+          `accessibilityValue` carries the same thing for VoiceOver, which
+          cannot see a fill at all. */}
+      <View
+        style={[styles.sheet, { bottom: insets.bottom > 0 ? insets.bottom : 32 }]}
+        accessibilityValue={{ text: `${Math.round(progress * 100)} percent of the route walked` }}
+      >
+        <View
+          style={[
+            styles.sheetFill,
+            { backgroundColor: OVERLAY_GREEN, width: `${Math.round(progress * 100)}%` },
+          ]}
+        />
         <View style={styles.sheetRow}>
           <View style={styles.sheetText}>
             <Text style={[styles.destination, { fontSize: F.body }]} numberOfLines={1}>
@@ -613,15 +631,6 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           >
             <Text style={[styles.endButtonText, { fontSize: F.sm }]}>End</Text>
           </Pressable>
-        </View>
-
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              { backgroundColor: T.green, width: `${Math.round(progress * 100)}%` },
-            ]}
-          />
         </View>
       </View>
     </CameraStage>
@@ -729,28 +738,33 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: SCREEN_MARGIN,
     right: SCREEN_MARGIN,
-    backgroundColor: 'rgba(20,20,20,0.72)',
+    backgroundColor: 'rgba(20,20,20,0.78)',
     borderRadius: RADIUS.section,
     paddingVertical: 16,
     paddingHorizontal: 18,
+    // Clips the fill to the rounded corners - without it the walked portion
+    // squares off the left end of the bar.
+    overflow: 'hidden',
+  },
+  sheetFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    // Held well down, so it reads as a tint on the bar rather than as a green
+    // panel with text on it. The text has to stay legible across the boundary,
+    // and it crosses that boundary at some point on every walk.
+    opacity: 0.3,
   },
   sheetRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   sheetText: { flex: 1 },
   destination: { color: '#fff', fontWeight: '700' },
-  remaining: { color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+  remaining: { color: 'rgba(255,255,255,0.72)', marginTop: 2 },
   endButton: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: OVERLAY_RED,
     borderRadius: RADIUS.small,
     paddingVertical: 9,
     paddingHorizontal: 16,
   },
   endButtonText: { color: '#fff', fontWeight: '700' },
-  progressTrack: {
-    marginTop: 12,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%', borderRadius: 3 },
 });

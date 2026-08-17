@@ -1,14 +1,14 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { HazardCameraView, isARGeospatialSupported } from '../../modules/ar-geospatial';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
-import { PulsingDot } from '../components/PulsingDot';
-import { VoiceCuePill } from '../components/VoiceCuePill';
+import { HazardIntro } from '../components/HazardIntro';
+import { VoiceCueBar } from '../components/VoiceCueBar';
 import { useSettings } from '../theme/SettingsContext';
-import { HAZARD_COLORS, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
+import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 import { HAZARD_CLASSES } from '../types/hazard';
 import { useHazardDetections } from '../services/hazardDetector';
 import { useSpokenHazardCues } from '../services/voiceCues';
@@ -18,7 +18,7 @@ import { useSpokenHazardCues } from '../services/voiceCues';
 export function HazardDetectionScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const { F, scaled, hazardActive, hazardCues } = useSettings();
+  const { F, hazardActive, hazardCues } = useSettings();
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -35,6 +35,16 @@ export function HazardDetectionScreen() {
   // out potholes would be baffling.
   useSpokenHazardCues(hazardCues && isFocused, detections);
 
+  // The intro card, back on every visit to the tab.
+  //
+  // Keyed on focus rather than on mount for the same reason the detector is:
+  // this screen is never unmounted, only navigated away from, so a mount-time
+  // state would show the card once per launch and never again.
+  const [introVisible, setIntroVisible] = useState(true);
+  useEffect(() => {
+    if (isFocused) setIntroVisible(true);
+  }, [isFocused]);
+
   // The camera that also runs the model. Same detector as AR Navigation, minus
   // the AR session that screen needs and this one does not.
   const surface = isARGeospatialSupported ? (
@@ -50,30 +60,35 @@ export function HazardDetectionScreen() {
       <HazardOverlay detections={detections} />
 
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
-        <View style={styles.scanPill}>
-          <PulsingDot color={HAZARD_COLORS.pothole} size={scaled(8)} />
-          <Text style={[styles.scanPillText, { fontSize: F.xs }]}>Scanning for hazards</Text>
-        </View>
         {/* Only the hazard half here: there is no route on this screen, so
             there are no turns to speak. Spoken turn cues stay whatever the
             user last set them to. */}
-        <VoiceCuePill cue="hazards" />
+        <VoiceCueBar cues={['hazards']} />
       </View>
 
-      {/* No bottom safe-area padding here: this is a tab screen, and the tab
-          bar below it already covers the home indicator. */}
-      <View style={styles.sheet}>
-        <Text style={[styles.sheetTitle, { fontSize: F.body }]}>
-          {error ? 'Detection unavailable' : 'Point your camera at the path ahead'}
-        </Text>
-        {/* A model that failed to load says so. Without this the screen looks
-            identical to one pointed at a perfectly clear pavement, and the
-            difference between "nothing here" and "nothing will ever be found"
-            is the whole diagnosis. */}
-        <Text style={[styles.sheetSubtitle, { fontSize: F.tinySm }]}>
-          {error ?? 'Hazards are flagged in real time, no route needed'}
-        </Text>
-      </View>
+      {/* Kept after the intro is dismissed, and only on failure.
+
+          A model that failed to load has to keep saying so: without it the
+          screen looks identical to one pointed at a perfectly clear pavement,
+          and the difference between "nothing here" and "nothing will ever be
+          found" is the whole diagnosis. The intro card says it too, but the
+          error can arrive after that has been dismissed - and a condition that
+          persists cannot be reported only by something that does not.
+
+          No bottom safe-area padding: this is a tab screen, and the tab bar
+          below it already covers the home indicator. */}
+      {error && (
+        <View style={styles.sheet}>
+          <Text style={[styles.sheetTitle, { fontSize: F.body }]}>Detection unavailable</Text>
+          <Text style={[styles.sheetSubtitle, { fontSize: F.tinySm }]}>{error}</Text>
+        </View>
+      )}
+
+      <HazardIntro
+        visible={introVisible}
+        error={error ?? null}
+        onDismiss={() => setIntroVisible(false)}
+      />
     </CameraStage>
   );
 }
@@ -85,20 +100,12 @@ const styles = StyleSheet.create({
     right: SCREEN_MARGIN,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    // flex-end, not space-between. With the scanning pill gone this row has a
+    // single child, and space-between packs a lone item against the *start* -
+    // which would have quietly parked the sound bar on the left.
+    justifyContent: 'flex-end',
     gap: 8,
   },
-  scanPill: {
-    flexShrink: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    borderRadius: 20,
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-  },
-  scanPillText: { color: '#fff', fontWeight: '700' },
   sheet: {
     position: 'absolute',
     left: SCREEN_MARGIN,

@@ -44,6 +44,15 @@ export const HAZARD_COLORS = {
   'pathway-obstruction': '#FF9F0A',
 } as const;
 
+// On/off colours for the controls that sit over a camera preview.
+//
+// Fixed rather than themed, for the same reason the hazard colours above are:
+// a camera preview has no theme. The palette's own green is tuned for legibility
+// against a page background and comes out muddy over a dark overlay on a bright
+// street, which is the one place these are ever used.
+export const OVERLAY_GREEN = '#30D158';
+export const OVERLAY_RED = '#FF453A';
+
 // Shape of a resolved theme, shared by both modes so screens can be written
 // against one set of semantic names.
 export interface Palette {
