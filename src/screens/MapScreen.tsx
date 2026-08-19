@@ -25,7 +25,7 @@ import {
   getPlaceDetails,
 } from '../services/directions';
 import { planWalkingRoutes } from '../services/routing';
-import { routeDurationSeconds, type MobilityAid } from '../services/mobility';
+import { estimateWalk, routeDurationSeconds, type MobilityAid } from '../services/mobility';
 import {
   needsAccessibilityCheck,
   screenRoutes,
@@ -166,6 +166,32 @@ function surfaceNote(
     )} shares the road with traffic`,
     severity: surface.roadMeters / total > ROAD_SHARE_CAUTION ? 'caution' : 'clear',
   };
+}
+
+// The walk to a suggestion, at the user's own pace.
+//
+// The tilde is doing real work and is not decoration. Places measures in a
+// straight line, so this is an estimate of a route nobody has planned yet, and
+// it will not match the figure on the route panel once one has been. Printing
+// it bare would read as the same kind of number as that one.
+function formatWalk(straightLineMeters: number, aid: MobilityAid): string {
+  const walk = estimateWalk(straightLineMeters, aid);
+  return `~${formatDistance(walk.meters)} · ${formatDuration(walk.seconds)}`;
+}
+
+// Read out as one sentence rather than as three loose fragments, and with the
+// estimate spelled out - a screen reader user gets no tilde and no layout to
+// tell them this figure is softer than the one on the route panel.
+function suggestionLabel(suggestion: PlaceSuggestion, aid: MobilityAid): string {
+  const parts = [suggestion.name];
+  if (suggestion.secondaryText) parts.push(suggestion.secondaryText);
+  if (suggestion.distanceMeters !== undefined) {
+    const walk = estimateWalk(suggestion.distanceMeters, aid);
+    parts.push(
+      `about ${formatDistance(walk.meters)}, roughly ${formatDuration(walk.seconds)} on foot`,
+    );
+  }
+  return parts.join(', ');
 }
 
 // The panel's accessibility line: either a verdict with a coloured dot, or a
@@ -1115,13 +1141,29 @@ export function MapScreen() {
                   <Pressable
                     style={[styles.suggestionRow, { borderBottomColor: T.sepStrong }]}
                     onPress={() => handleSelectSuggestion(item)}
+                    accessibilityRole="button"
+                    accessibilityLabel={suggestionLabel(item, mobilityAid)}
                   >
-                    <Text
-                      style={[styles.suggestionName, { color: T.text, fontSize: F.label }]}
-                      numberOfLines={1}
-                    >
-                      {item.name}
-                    </Text>
+                    <View style={styles.suggestionTop}>
+                      <Text
+                        style={[styles.suggestionName, { color: T.text, fontSize: F.label, flex: 1 }]}
+                        numberOfLines={1}
+                      >
+                        {item.name}
+                      </Text>
+                      {/* The walk, on the right of the name where the eye can
+                          run down the column and compare rows. Prefixed with ~
+                          because it is measured in a straight line and the real
+                          route is longer - see `estimateWalk`. */}
+                      {item.distanceMeters !== undefined && (
+                        <Text
+                          style={[styles.suggestionWalk, { color: T.text2, fontSize: F.xs }]}
+                          numberOfLines={1}
+                        >
+                          {formatWalk(item.distanceMeters, mobilityAid)}
+                        </Text>
+                      )}
+                    </View>
                     {item.secondaryText && (
                       <Text
                         style={[styles.suggestionSecondary, { color: T.text2, fontSize: F.xs }]}
@@ -1281,7 +1323,12 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
+  suggestionTop: { flexDirection: 'row', alignItems: 'baseline', gap: 10 },
   suggestionName: { fontWeight: '600' },
+  // Never shrinks: the place name has flex and wins the squeeze, because a
+  // truncated name is still recognisable and a truncated "1.2 km · 18 min" is
+  // not.
+  suggestionWalk: { fontWeight: '600', flexShrink: 0 },
   suggestionSecondary: { marginTop: 2 },
   routePanel: {
     position: 'absolute',

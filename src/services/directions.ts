@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { decodePolyline } from '../utils/geo';
+import { decodePolyline, distanceMeters } from '../utils/geo';
 import type { LatLng, PlaceSuggestion, RouteStep, WalkingRoute } from '../types/route';
 
 // How far around the user's current location to bias/limit place
@@ -34,15 +34,34 @@ export async function getNearbyPlaces(origin: LatLng): Promise<PlaceSuggestion[]
     throw new DirectionsError(`Could not load nearby places (${data.status ?? 'unknown error'}).`);
   }
 
-  return (data.results ?? []).map((result: any) => ({
-    placeId: result.place_id as string,
-    name: result.name as string,
-    secondaryText: result.vicinity as string | undefined,
-  }));
+  // Nearby Search carries coordinates on every result, so the distance is
+  // measured here rather than asked for - there is no `origin` parameter on
+  // this endpoint the way there is on Autocomplete.
+  const suggestions: PlaceSuggestion[] = (data.results ?? []).map((result: any) => {
+    const location = result.geometry?.location;
+    return {
+      placeId: result.place_id as string,
+      name: result.name as string,
+      secondaryText: result.vicinity as string | undefined,
+      distanceMeters:
+        typeof location?.lat === 'number' && typeof location?.lng === 'number'
+          ? distanceMeters(origin, { latitude: location.lat, longitude: location.lng })
+          : undefined,
+    };
+  });
+
+  return byDistance(suggestions);
 }
 
 // Places matching what the user has typed so far (Places Autocomplete),
-// biased toward the user's current location.
+// biased toward the user's current location and returned nearest first.
+//
+// `location` + `radius` bias *which* places come back; `origin` is a separate
+// parameter that asks Google to measure each prediction from a point and return
+// `distance_meters` with it. Without `origin` the predictions carry no distance
+// at all, and the only other way to get one would be a Place Details request
+// per suggestion - four or five extra round trips on every keystroke, billed
+// individually. One parameter replaces all of that.
 export async function getPlaceAutocomplete(
   input: string,
   origin: LatLng,
@@ -52,6 +71,7 @@ export async function getPlaceAutocomplete(
   url.searchParams.set('input', input);
   url.searchParams.set('location', `${origin.latitude},${origin.longitude}`);
   url.searchParams.set('radius', String(NEARBY_SEARCH_RADIUS_METERS));
+  url.searchParams.set('origin', `${origin.latitude},${origin.longitude}`);
   url.searchParams.set('key', apiKey);
 
   const response = await fetch(url.toString());
@@ -61,11 +81,36 @@ export async function getPlaceAutocomplete(
     throw new DirectionsError(`Could not load suggestions (${data.status ?? 'unknown error'}).`);
   }
 
-  return (data.predictions ?? []).map((prediction: any) => ({
+  const suggestions: PlaceSuggestion[] = (data.predictions ?? []).map((prediction: any) => ({
     placeId: prediction.place_id as string,
     name: (prediction.structured_formatting?.main_text ?? prediction.description) as string,
     secondaryText: prediction.structured_formatting?.secondary_text as string | undefined,
+    distanceMeters:
+      typeof prediction.distance_meters === 'number' ? prediction.distance_meters : undefined,
   }));
+
+  return byDistance(suggestions);
+}
+
+// Nearest first, with anything Google could not measure left in the order it
+// gave them.
+//
+// This deliberately overrides Google's own ranking, which is by relevance to
+// the typed text. For a walking app that is the right trade: someone on foot
+// searching "pharmacy" wants the one they can reach, and the second-best name
+// match 300m away beats the best one across the city. It is a real trade
+// though - a distinctive query whose obvious answer is far away will no longer
+// come first.
+//
+// `sort` is stable in Hermes, so the unmeasured tail keeps Google's relevance
+// order among itself rather than being shuffled.
+function byDistance(suggestions: PlaceSuggestion[]): PlaceSuggestion[] {
+  return [...suggestions].sort((a, b) => {
+    if (a.distanceMeters === undefined && b.distanceMeters === undefined) return 0;
+    if (a.distanceMeters === undefined) return 1;
+    if (b.distanceMeters === undefined) return -1;
+    return a.distanceMeters - b.distanceMeters;
+  });
 }
 
 // Resolves a suggestion's place ID (from either of the two functions above)

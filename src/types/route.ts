@@ -74,4 +74,12 @@ export interface PlaceSuggestion {
   placeId: string;
   name: string;
   secondaryText?: string;
+  /** Straight-line metres from the user, for ordering the list and for the
+   *  rough walk estimate shown on each row.
+   *
+   *  Straight-line and not along any path: neither Places endpoint knows what
+   *  a walking route to the place would look like, and finding out would mean
+   *  a routing request per suggestion on every keystroke. Absent when Google
+   *  returns a prediction with no distance, which it does for vague matches. */
+  distanceMeters?: number;
 }

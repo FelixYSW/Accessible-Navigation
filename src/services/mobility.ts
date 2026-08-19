@@ -71,6 +71,32 @@ export function routeDurationSeconds(
   return durationSeconds * (routerSpeed / MOBILITY_AID_SPEED_MPS[aid]);
 }
 
+// How much further you actually walk than the straight line to a place.
+//
+// Streets do not run in straight lines and pedestrians cannot cut through
+// buildings, so the crow-flies distance a Places result carries always
+// understates the walk. The ratio between the two is the network's circuity,
+// and for urban pedestrian networks it sits somewhere around 1.2-1.5; 1.3 is
+// the middle of that.
+//
+// It is an estimate and nothing more. The honest figure for a given place is
+// the one that appears once a route has actually been planned to it, and the
+// two will differ - sometimes a lot, in a place like the study area where a
+// river or an expressway can make a 200m straight line into a kilometre of
+// walking. This exists so a list of suggestions can say something useful about
+// effort before committing to a routing request for each one.
+const PEDESTRIAN_CIRCUITY = 1.3;
+
+/** A rough walk to somewhere `straightLineMeters` away as the crow flies,
+ *  at the pace implied by the user's Mobility aid setting. */
+export function estimateWalk(
+  straightLineMeters: number,
+  aid: MobilityAid,
+): { meters: number; seconds: number } {
+  const meters = straightLineMeters * PEDESTRIAN_CIRCUITY;
+  return { meters, seconds: meters / MOBILITY_AID_SPEED_MPS[aid] };
+}
+
 // One short line under the control in Settings, so the setting visibly does
 // something instead of looking decorative. Covers both of its effects - the
 // slower timings and the kind of route planned - in plain words; the exact
