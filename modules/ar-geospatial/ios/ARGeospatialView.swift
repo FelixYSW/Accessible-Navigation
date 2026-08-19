@@ -40,9 +40,25 @@ struct GeoAnchorRecord: Record {
 /// is tilted, which is the difference between paint on the road and a sticker
 /// on the lens.
 enum GroundChevron {
-  /// Roughly how far below the phone the pavement is, used to drop the anchors
-  /// from the reported camera altitude onto the ground.
+  /// Roughly how far below the phone the pavement is. Used as the altitude
+  /// hint when the anchor is created, and as the fallback drop when ARKit has
+  /// not yet found a floor to measure against.
   static let cameraHeightM: Double = 1.4
+
+  /// How far below the camera a detected horizontal plane has to be before it
+  /// is believed to be the ground.
+  ///
+  /// The lower bound rejects table tops, car roofs and the top of a wall, none
+  /// of which are the thing being walked on. The upper bound rejects a plane
+  /// found across a drop - the road at the bottom of an embankment is a real
+  /// horizontal plane and the wrong one to paint the route onto.
+  static let minGroundDropM: Float = 0.6
+  static let maxGroundDropM: Float = 2.6
+
+  /// How much of each new ground measurement to take. Plane anchors are
+  /// re-estimated constantly and their height twitches by a few centimetres as
+  /// they grow; taken raw, the whole run of chevrons bobs.
+  static let groundSmoothing: Float = 0.15
 
   /// One chevron in its own frame, in metres: x across the path, y along it.
   ///
@@ -95,6 +111,14 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   private var requestedAnchors: [(id: Int, kind: String, coordinate: CLLocationCoordinate2D)] = []
   private var placedAnchors: [Int: GARAnchor] = [:]
   private var anchorsAreStale = false
+
+  /// Every horizontal plane ARKit is currently tracking, by height in world
+  /// space, and the smoothed floor height picked from them.
+  ///
+  /// This is what the chevrons are actually drawn on, and it is measured
+  /// rather than taken from the anchor's own altitude - see `onGround`.
+  private var horizontalPlanes: [UUID: Float] = [:]
+  private var groundY: Float?
 
   /// Whether to plant the plain ARKit control anchors. Only the Geospatial test
   /// screen wants them; on a real route they would be three stray marks on the
@@ -206,6 +230,74 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func session(_ session: ARSession, didFailWithError error: Error) {
     report(failure: "Camera tracking failed: \(error.localizedDescription)")
+  }
+
+  func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+    absorb(planes: anchors)
+  }
+
+  func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+    absorb(planes: anchors)
+  }
+
+  func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
+    for anchor in anchors {
+      horizontalPlanes.removeValue(forKey: anchor.identifier)
+    }
+  }
+
+  private func absorb(planes anchors: [ARAnchor]) {
+    for case let plane as ARPlaneAnchor in anchors where plane.alignment == .horizontal {
+      horizontalPlanes[plane.identifier] = plane.transform.columns.3.y
+    }
+  }
+
+  /// The height of the floor in ARKit's world, if one has been found under the
+  /// camera.
+  ///
+  /// The highest qualifying plane rather than the lowest: standing on a kerb
+  /// with the road beside it, both are real horizontal planes at plausible
+  /// drops, and the one being walked on is the upper. Picking the lowest would
+  /// paint the route into the gutter.
+  private func updateGroundLevel(arFrame: ARFrame) {
+    let cameraY = arFrame.camera.transform.columns.3.y
+
+    var best: Float?
+    for planeY in horizontalPlanes.values {
+      let drop = cameraY - planeY
+      guard drop >= GroundChevron.minGroundDropM, drop <= GroundChevron.maxGroundDropM else {
+        continue
+      }
+      if best == nil || planeY > best! { best = planeY }
+    }
+
+    guard let measured = best else { return }
+    if let current = groundY {
+      groundY = current + (measured - current) * GroundChevron.groundSmoothing
+    } else {
+      groundY = measured
+    }
+  }
+
+  /// Puts a point on the floor, keeping only its horizontal position.
+  ///
+  /// This is the one line that decides whether the chevrons are visible at all,
+  /// and it exists because the two halves of an anchor's position are not
+  /// equally trustworthy. ARCore's Geospatial API is good horizontally - about
+  /// a metre where VPS has coverage - and much weaker vertically, because it
+  /// reports a WGS84 ellipsoid altitude that has to be round-tripped back into
+  /// ARKit's world. An error of a metre and a half in that round trip puts a
+  /// flat chevron at eye level, where a horizontal polygon is seen edge-on and
+  /// collapses to a line: not a wrong-looking arrow, an invisible one.
+  ///
+  /// So the horizontal position is taken from the anchor and the height is
+  /// thrown away, replaced by a floor ARKit has actually seen. Failing that,
+  /// the camera's own height in ARKit's world less a carrying height - still
+  /// better than the anchor's altitude, because ARKit's vertical is gravity
+  /// aligned and exact, and only the 1.4m assumption is approximate.
+  private func onGround(_ position: simd_float3, arFrame: ARFrame) -> simd_float3 {
+    let floor = groundY ?? (arFrame.camera.transform.columns.3.y - Float(GroundChevron.cameraHeightM))
+    return simd_float3(position.x, floor, position.z)
   }
 
   /// The detector throttles itself, so this can be called on every frame - it
@@ -334,6 +426,8 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     let viewport = bounds.size
     guard viewport.width > 0, viewport.height > 0 else { return }
 
+    updateGroundLevel(arFrame: arFrame)
+
     var projected: [[String: Any]] = []
 
     for (index, anchor) in localAnchors.enumerated() {
@@ -357,7 +451,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     let route = requestedAnchors.compactMap { request -> (id: Int, position: simd_float3)? in
       guard request.kind == "route" else { return nil }
       guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { return nil }
-      return (id: request.id, position: origin(of: anchor.transform))
+      return (id: request.id, position: onGround(origin(of: anchor.transform), arFrame: arFrame))
     }
 
     // Everything that is a point rather than a path: the destination pin. Sent
@@ -367,7 +461,9 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { continue }
       projected.append(
         project(
-          position: origin(of: anchor.transform),
+          // Stands on the floor for the same reason the chevrons lie on it -
+          // a pin whose base is at eye level reads as floating in the air.
+          position: onGround(origin(of: anchor.transform), arFrame: arFrame),
           index: request.id,
           kind: request.kind,
           forward: nil,
