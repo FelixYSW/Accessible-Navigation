@@ -62,6 +62,12 @@ enum GroundChevron {
   /// above already spreads each reading over several frames.
   static let groundProbeInterval: TimeInterval = 0.1
 
+  /// The run planted by a tap in preview mode: how many chevrons and how far
+  /// apart. The spacing matches ANCHOR_SPACING_M on the navigation screen, so
+  /// what is being previewed is the real thing at its real density.
+  static let previewCount = 8
+  static let previewSpacingM: Float = 1.2
+
   /// One chevron in its own frame, in metres: x across the path, y along it.
   ///
   /// 1.3m across and 1.1m deep - about the width of a pavement, and big enough
@@ -126,6 +132,38 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// screen wants them; on a real route they would be three stray marks on the
   /// floor with no meaning.
   private var showControlAnchors = false
+
+  /// Preview mode: tap the floor and a run of chevrons is planted there.
+  ///
+  /// Deliberately built on plain ARKit anchors and a raycast, with no
+  /// Geospatial session involved at all. That is what makes it work indoors,
+  /// which is the whole point of it - the navigation screen needs to know where
+  /// on Earth it is, and this needs only to know where the floor is. Somewhere
+  /// with no Street View coverage, no GPS fix and no sky is a perfectly good
+  /// place to check whether a chevron looks right.
+  private var previewMode = false
+  private var previewComponent = "trail"
+  private var previewClearToken = 0
+  private var previewPlacements: [PreviewPlacement] = []
+  private var previewTap: UITapGestureRecognizer?
+
+  /// One thing put down by a tap.
+  ///
+  /// The facing direction is stored per placement rather than derived from the
+  /// run, which is the difference between a preview and a route. A route is a
+  /// chain, and each chevron on it turns to face the next; a preview is a
+  /// scatter of separate objects, and a chevron dropped on its own has no next
+  /// point to aim at. Deriving it would make two chevrons placed minutes apart
+  /// swing round to face each other.
+  private struct PreviewPlacement {
+    let anchor: ARAnchor
+    /// The *projected* kind, the vocabulary the JS overlays filter on:
+    /// "geospatial" for a ground chevron, "destination" for the pin. Not the
+    /// "route"/"destination" vocabulary a GeoAnchorRecord arrives with - the
+    /// two lists differ, and using the input names here draws nothing at all.
+    let kind: String
+    let forward: simd_float3
+  }
 
   /// Plain ARKit anchors, planted straight ahead on the floor as soon as the
   /// camera is tracking and independent of anything geospatial.
@@ -194,6 +232,89 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func setShowControlAnchors(_ show: Bool) {
     showControlAnchors = show
+  }
+
+  func setPreviewMode(_ on: Bool) {
+    guard on != previewMode else { return }
+    previewMode = on
+
+    if on, previewTap == nil {
+      let tap = UITapGestureRecognizer(target: self, action: #selector(handlePreviewTap(_:)))
+      addGestureRecognizer(tap)
+      previewTap = tap
+    }
+    previewTap?.isEnabled = on
+
+    if !on { clearPreview() }
+  }
+
+  func setPreviewComponent(_ component: String) {
+    previewComponent = component
+  }
+
+  /// Cleared by a token rather than by a method call, because a view in this
+  /// module is reached through props and not through a ref. Any change to the
+  /// number means "clear now"; its value carries nothing.
+  func setPreviewClearToken(_ token: Int) {
+    guard token != previewClearToken else { return }
+    previewClearToken = token
+    clearPreview()
+  }
+
+  private func clearPreview() {
+    for placement in previewPlacements { sceneView.session.remove(anchor: placement.anchor) }
+    previewPlacements.removeAll()
+  }
+
+  /// Puts the chosen component down exactly where the floor was tapped.
+  ///
+  /// Placements accumulate, so a chevron and a pin can be put down together and
+  /// looked at as a pair. `previewClearToken` takes them all away again.
+  ///
+  /// Everything faces away from the phone rather than along the camera's
+  /// forward axis, so tapping off to one side aims it towards that spot rather
+  /// than parallel to wherever the lens happens to point.
+  @objc private func handlePreviewTap(_ gesture: UITapGestureRecognizer) {
+    guard previewMode, let frame = sceneView.session.currentFrame else { return }
+
+    let point = gesture.location(in: sceneView)
+    guard
+      let query = sceneView.raycastQuery(
+        from: point,
+        allowing: .estimatedPlane,
+        alignment: .horizontal
+      ),
+      let hit = sceneView.session.raycast(query).first
+    else { return }
+
+    let start = origin(of: hit.worldTransform)
+    let camera = origin(of: frame.camera.transform)
+    let forward = flattened(start - camera) ?? cameraForward(frame)
+
+    switch previewComponent {
+    case "pin":
+      place(at: start, kind: "destination", forward: forward)
+    case "chevron":
+      place(at: start, kind: "geospatial", forward: forward)
+    default:
+      // The trail: the run as the navigation screen lays it out, starting at
+      // the tap and leading away.
+      for step in 0..<GroundChevron.previewCount {
+        let along = forward * (Float(step) * GroundChevron.previewSpacingM)
+        place(at: start + along, kind: "geospatial", forward: forward)
+      }
+    }
+  }
+
+  private func place(at position: simd_float3, kind: String, forward: simd_float3) {
+    var transform = matrix_identity_float4x4
+    transform.columns.3 = simd_float4(position, 1)
+
+    // Handed to ARKit rather than kept as a bare position, so placements are
+    // corrected along with everything else when tracking relocalises.
+    let anchor = ARAnchor(transform: transform)
+    sceneView.session.add(anchor: anchor)
+    previewPlacements.append(PreviewPlacement(anchor: anchor, kind: kind, forward: forward))
   }
 
   // MARK: - ARKit
@@ -436,6 +557,11 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
     updateGroundLevel(arFrame: arFrame)
 
+    if previewMode {
+      emitPreviewAnchors(arFrame: arFrame, viewport: viewport)
+      return
+    }
+
     var projected: [[String: Any]] = []
 
     for (index, anchor) in localAnchors.enumerated() {
@@ -511,6 +637,34 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// One anchor, as the JS layer needs it: where its centre lands on screen,
   /// and - when it is a route point - the six screen corners of the chevron
   /// lying flat on the ground there.
+  /// The tapped run, projected exactly the way a real route is.
+  ///
+  /// Same `kind` values, same forward-facing logic, same projection - so what
+  /// the preview shows is the navigation screen's own drawing rather than a
+  /// mock-up of it, and the JS side needs no idea which one it is looking at.
+  private func emitPreviewAnchors(arFrame: ARFrame, viewport: CGSize) {
+    var projected: [[String: Any]] = []
+
+    for (index, placement) in previewPlacements.enumerated() {
+      projected.append(
+        project(
+          position: onGround(origin(of: placement.anchor.transform), arFrame: arFrame),
+          // The pin's index is negative, matching the destination id the
+          // navigation screen uses, so the JS side treats it the same way.
+          index: placement.kind == "destination" ? -1 - index : index,
+          kind: placement.kind,
+          // A pin carries no direction through it, so it gets none - the same
+          // as on a real route.
+          forward: placement.kind == "geospatial" ? placement.forward : nil,
+          arFrame: arFrame,
+          viewport: viewport
+        )
+      )
+    }
+
+    onAnchorsUpdate(["anchors": projected])
+  }
+
   private func project(
     position: simd_float3,
     index: Int,

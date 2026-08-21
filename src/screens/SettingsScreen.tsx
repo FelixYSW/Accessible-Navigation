@@ -1,6 +1,9 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/RootNavigator';
 import { Rabbit, Turtle } from 'lucide-react-native';
 import { SegmentedField } from '../components/SegmentedField';
 import { HAZARD_ICONS } from '../components/hazardIcons';
@@ -26,6 +29,7 @@ const TEXT_SIZES: { key: FontScaleKey; label: string }[] = [
 
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const {
     T,
     F,
@@ -176,6 +180,28 @@ export function SettingsScreen() {
             {MOBILITY_AID_DESCRIPTIONS[mobilityAid]}
           </Text>
         </View>
+      </View>
+
+      {/* Reachable from Settings rather than from the tab bar: it is a thing
+          you go and look at once to check the guidance, not a fourth place to
+          navigate from. */}
+      <SectionLabel>AR guidance</SectionLabel>
+      <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
+        <Pressable
+          style={[styles.row, styles.rowInline]}
+          onPress={() => navigation.navigate('ARPreview')}
+          accessibilityRole="button"
+        >
+          <View style={styles.rowTextBlock}>
+            <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
+              Preview AR Guidance
+            </Text>
+            <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
+              Tap the floor to place the arrows, without planning a route
+            </Text>
+          </View>
+          <Text style={{ color: T.text2, fontSize: F.body }}>›</Text>
+        </Pressable>
       </View>
 
       <SectionLabel>Hazard types</SectionLabel>

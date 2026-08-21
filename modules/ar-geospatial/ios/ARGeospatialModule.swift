@@ -34,6 +34,23 @@ public class ARGeospatialModule: Module {
       Prop("showControlAnchors") { (view: ARGeospatialView, show: Bool) in
         view.setShowControlAnchors(show)
       }
+
+      // Tap-to-place preview. Runs on ARKit alone, so it works indoors and
+      // anywhere else the Geospatial API cannot localise.
+      Prop("previewMode") { (view: ARGeospatialView, preview: Bool) in
+        view.setPreviewMode(preview)
+      }
+
+      // Which component the next tap puts down: "chevron", "trail" or "pin".
+      Prop("previewComponent") { (view: ARGeospatialView, component: String) in
+        view.setPreviewComponent(component)
+      }
+
+      // Change this number to remove everything placed so far. A prop rather
+      // than a method because this module's views are driven by props.
+      Prop("previewClearToken") { (view: ARGeospatialView, token: Int) in
+        view.setPreviewClearToken(token)
+      }
     }
 
     // The Hazard Detection screen's camera: the same model as above, without

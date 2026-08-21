@@ -2,11 +2,16 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { TabNavigator } from './TabNavigator';
 import { ARNavigationScreen } from '../screens/ARNavigationScreen';
+import { ARPreviewScreen } from '../screens/ARPreviewScreen';
 import type { WalkingRoute } from '../types/route';
 
 export type RootStackParamList = {
   Tabs: undefined;
   ARNavigation: { route: WalkingRoute };
+
+  /** Tap-to-place sandbox for the AR guidance. No route, no Geospatial
+   *  session, so it works indoors. */
+  ARPreview: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -21,6 +26,11 @@ export function RootNavigator() {
       <Stack.Screen
         name="ARNavigation"
         component={ARNavigationScreen}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+      <Stack.Screen
+        name="ARPreview"
+        component={ARPreviewScreen}
         options={{ animation: 'slide_from_bottom' }}
       />
     </Stack.Navigator>

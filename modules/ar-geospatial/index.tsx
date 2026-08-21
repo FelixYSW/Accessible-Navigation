@@ -87,12 +87,32 @@ export interface HazardsEvent {
   error?: string;
 }
 
+/** The components that can be placed by hand in preview mode.
+ *
+ *  Only two things in this app are drawn at a fixed point in the world: the
+ *  ground chevron and the destination pin. The compass arrows are relative to
+ *  the camera and the hazard boxes come from the detector, so neither can be
+ *  put anywhere. "trail" is the chevron again, laid out as a route would. */
+export type PreviewComponent = 'chevron' | 'trail' | 'pin';
+
 export interface ARGeospatialViewProps extends ViewProps {
-  apiKey: string;
-  anchors: GeoAnchor[];
+  /** Both optional because `previewMode` needs neither: it plants its run on
+   *  ARKit anchors from a tap, so there is no route to anchor and no Geospatial
+   *  session to authorise. Omitting the key is what keeps that session from
+   *  starting at all, which is what lets the preview work indoors. */
+  apiKey?: string;
+  anchors?: GeoAnchor[];
   /** Plants three plain ARKit anchors ahead of the camera, to judge the
    *  tracking itself against. Only the Geospatial test screen wants them. */
   showControlAnchors?: boolean;
+
+  /** Tap the floor to place components, with no route and no Geospatial
+   *  session. Works indoors, which is what it is for. */
+  previewMode?: boolean;
+  /** What the next tap puts down. */
+  previewComponent?: PreviewComponent;
+  /** Any change removes everything placed so far. The value means nothing. */
+  previewClearToken?: number;
   onGeospatialUpdate?: (event: { nativeEvent: GeospatialUpdate }) => void;
   onAnchorsUpdate?: (event: { nativeEvent: { anchors: ProjectedAnchor[] } }) => void;
   onHazards?: (event: { nativeEvent: HazardsEvent }) => void;
