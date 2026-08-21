@@ -45,20 +45,22 @@ enum GroundChevron {
   /// not yet found a floor to measure against.
   static let cameraHeightM: Double = 1.4
 
-  /// How far below the camera a detected horizontal plane has to be before it
-  /// is believed to be the ground.
+  /// The range of drops below the camera a floor reading is allowed to fall in.
   ///
-  /// The lower bound rejects table tops, car roofs and the top of a wall, none
-  /// of which are the thing being walked on. The upper bound rejects a plane
-  /// found across a drop - the road at the bottom of an embankment is a real
-  /// horizontal plane and the wrong one to paint the route onto.
+  /// A sanity check on the downward raycast rather than a way of choosing
+  /// between candidates: a hit closer than this is something being walked over,
+  /// and one further away is the estimate having gone through the ground.
+  /// Outside the band the reading is dropped and the previous one kept.
   static let minGroundDropM: Float = 0.6
   static let maxGroundDropM: Float = 2.6
 
-  /// How much of each new ground measurement to take. Plane anchors are
-  /// re-estimated constantly and their height twitches by a few centimetres as
-  /// they grow; taken raw, the whole run of chevrons bobs.
+  /// How much of each new floor reading to take. The estimate wanders by a few
+  /// centimetres between probes; taken raw, the whole run of chevrons bobs.
   static let groundSmoothing: Float = 0.15
+
+  /// How often to look for the floor. The floor does not move; the smoothing
+  /// above already spreads each reading over several frames.
+  static let groundProbeInterval: TimeInterval = 0.1
 
   /// One chevron in its own frame, in metres: x across the path, y along it.
   ///
@@ -112,13 +114,13 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   private var placedAnchors: [Int: GARAnchor] = [:]
   private var anchorsAreStale = false
 
-  /// Every horizontal plane ARKit is currently tracking, by height in world
-  /// space, and the smoothed floor height picked from them.
+  /// The smoothed height of the floor under the phone, and when it was last
+  /// probed for.
   ///
   /// This is what the chevrons are actually drawn on, and it is measured
   /// rather than taken from the anchor's own altitude - see `onGround`.
-  private var horizontalPlanes: [UUID: Float] = [:]
   private var groundY: Float?
+  private var lastGroundProbe: TimeInterval = 0
 
   /// Whether to plant the plain ARKit control anchors. Only the Geospatial test
   /// screen wants them; on a real route they would be three stray marks on the
@@ -232,46 +234,52 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     report(failure: "Camera tracking failed: \(error.localizedDescription)")
   }
 
-  func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-    absorb(planes: anchors)
-  }
-
-  func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-    absorb(planes: anchors)
-  }
-
-  func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
-    for anchor in anchors {
-      horizontalPlanes.removeValue(forKey: anchor.identifier)
-    }
-  }
-
-  private func absorb(planes anchors: [ARAnchor]) {
-    for case let plane as ARPlaneAnchor in anchors where plane.alignment == .horizontal {
-      horizontalPlanes[plane.identifier] = plane.transform.columns.3.y
-    }
-  }
-
-  /// The height of the floor in ARKit's world, if one has been found under the
-  /// camera.
+  /// The height of the floor in ARKit's world, found by looking straight down
+  /// from the phone.
   ///
-  /// The highest qualifying plane rather than the lowest: standing on a kerb
-  /// with the road beside it, both are real horizontal planes at plausible
-  /// drops, and the one being walked on is the upper. Picking the lowest would
-  /// paint the route into the gutter.
+  /// This replaces picking the highest horizontal plane within a plausible drop
+  /// of the camera, which was wrong outdoors in a way that is obvious in
+  /// hindsight: a car bonnet, a bench, a bin lid and the top of a low wall are
+  /// all horizontal planes sitting between half a metre and two metres under a
+  /// held phone, and every one of them is *above* the pavement. Choosing the
+  /// highest chose those, and the chevrons floated at the height of whatever
+  /// furniture happened to be nearby.
+  ///
+  /// A downward raycast asks the question that was actually meant - what is the
+  /// ground *beneath me* - and cannot be answered by a bench three metres to
+  /// the side. `.estimatedPlane` rather than an existing plane anchor, because
+  /// tarmac and smooth pavement are exactly the low-texture surfaces ARKit is
+  /// slowest to promote into a full plane, and the estimate is available long
+  /// before the anchor is.
   private func updateGroundLevel(arFrame: ARFrame) {
-    let cameraY = arFrame.camera.transform.columns.3.y
+    // Raycasting on every frame is wasted work: the floor does not move, and
+    // the smoothing below already spreads each reading over several frames.
+    let now = arFrame.timestamp
+    guard now - lastGroundProbe > GroundChevron.groundProbeInterval else { return }
+    lastGroundProbe = now
 
-    var best: Float?
-    for planeY in horizontalPlanes.values {
-      let drop = cameraY - planeY
-      guard drop >= GroundChevron.minGroundDropM, drop <= GroundChevron.maxGroundDropM else {
-        continue
-      }
-      if best == nil || planeY > best! { best = planeY }
+    let cameraY = arFrame.camera.transform.columns.3.y
+    let cameraPosition = origin(of: arFrame.camera.transform)
+
+    let query = ARRaycastQuery(
+      origin: cameraPosition,
+      direction: simd_float3(0, -1, 0),
+      allowing: .estimatedPlane,
+      alignment: .horizontal
+    )
+
+    guard let hit = sceneView.session.raycast(query).first else { return }
+    let measured = hit.worldTransform.columns.3.y
+
+    // A hit at an implausible drop is a bad estimate rather than an unusual
+    // floor - through the ground on a poor reading, or onto something being
+    // walked over. Held to the same band as before, but now as a sanity check
+    // on one answer rather than as the filter that chooses between many.
+    let drop = cameraY - measured
+    guard drop >= GroundChevron.minGroundDropM, drop <= GroundChevron.maxGroundDropM else {
+      return
     }
 
-    guard let measured = best else { return }
     if let current = groundY {
       groundY = current + (measured - current) * GroundChevron.groundSmoothing
     } else {

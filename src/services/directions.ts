@@ -18,9 +18,126 @@ function getApiKey(): string {
 
 export class DirectionsError extends Error {}
 
+// Words people type for a kind of place, mapped to the Google place type that
+// means it.
+//
+// Searching a type rather than a keyword is the difference between "places
+// near me that are pharmacies" and "places near me with the word pharmacy in
+// their name" - which in Malaysia misses Guardian, Watsons, Caring and every
+// independent farmasi, while matching anything that happens to be called
+// "... Pharmacy Sdn Bhd" however far away it is.
+//
+// Deliberately short. Every entry has to be a word someone would actually type
+// into a walking app, and a long list of guesses would mostly serve to
+// hijack searches that were meant literally.
+const PLACE_TYPES: Record<string, string> = {
+  atm: 'atm',
+  bakery: 'bakery',
+  bank: 'bank',
+  bar: 'bar',
+  'bus station': 'bus_station',
+  'bus stop': 'bus_station',
+  cafe: 'cafe',
+  clinic: 'doctor',
+  'convenience store': 'convenience_store',
+  dentist: 'dentist',
+  doctor: 'doctor',
+  gym: 'gym',
+  hospital: 'hospital',
+  hotel: 'lodging',
+  laundry: 'laundry',
+  library: 'library',
+  lrt: 'subway_station',
+  mall: 'shopping_mall',
+  market: 'supermarket',
+  mosque: 'mosque',
+  mrt: 'subway_station',
+  park: 'park',
+  parking: 'parking',
+  petrol: 'gas_station',
+  'petrol station': 'gas_station',
+  pharmacy: 'pharmacy',
+  farmasi: 'pharmacy',
+  police: 'police',
+  'post office': 'post_office',
+  restaurant: 'restaurant',
+  school: 'school',
+  'shopping mall': 'shopping_mall',
+  supermarket: 'supermarket',
+  'train station': 'train_station',
+  university: 'university',
+};
+
+function placeTypeFor(query: string): string | undefined {
+  return PLACE_TYPES[query.trim().toLowerCase()];
+}
+
+// Suggestions for whatever is in the search bar.
+//
+// Nearby Search ranked by distance is the primary source, and Autocomplete is
+// the fallback rather than the other way round. That is the opposite of the
+// obvious arrangement and it is the fix for a real failure: Autocomplete ranks
+// by relevance and prominence, so searching a chain returned the branches
+// Google considers notable rather than the ones within walking distance -
+// 1.2km away first while the 300m branch was not in the list at all. Sorting
+// cannot repair a list that never contained the right answer.
+//
+// Nearby Search asks a different question - "places matching this, nearest
+// first" - and answers it with real coordinates. Autocomplete still gets the
+// things Nearby Search cannot do: street addresses, and named places that are
+// not a POI category.
+export async function getSuggestions(
+  query: string,
+  origin: LatLng,
+): Promise<PlaceSuggestion[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return getNearbyPlaces(origin);
+
+  try {
+    const nearby = await searchNearby(trimmed, origin);
+    if (nearby.length > 0) return nearby;
+  } catch {
+    // Fall through to Autocomplete, which is a different endpoint and may well
+    // still answer.
+  }
+
+  return getPlaceAutocomplete(trimmed, origin);
+}
+
+// Places matching `query`, nearest first, with no distance limit.
+//
+// `rankby=distance` is what does the work here, and it comes with two API
+// constraints worth knowing: it forbids `radius`, and it requires one of
+// keyword, name or type. A category search sends `type` alone rather than both
+// - adding the keyword as well would AND the two and cut out every pharmacy
+// not literally named "pharmacy", which is the failure this is here to avoid.
+async function searchNearby(query: string, origin: LatLng): Promise<PlaceSuggestion[]> {
+  const apiKey = getApiKey();
+  const url = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
+  url.searchParams.set('location', `${origin.latitude},${origin.longitude}`);
+  url.searchParams.set('rankby', 'distance');
+  url.searchParams.set('key', apiKey);
+
+  const type = placeTypeFor(query);
+  if (type) {
+    url.searchParams.set('type', type);
+  } else {
+    url.searchParams.set('keyword', query);
+  }
+
+  const response = await fetch(url.toString());
+  const data = await response.json();
+
+  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+    throw new DirectionsError(`Could not search nearby (${data.status ?? 'unknown error'}).`);
+  }
+
+  return toSuggestions(data.results, origin);
+}
+
 // Places open around the user, shown as suggestions when the search bar is
 // focused but empty (Places Nearby Search).
-export async function getNearbyPlaces(origin: LatLng): Promise<PlaceSuggestion[]> {
+async function getNearbyPlaces(origin: LatLng): Promise<PlaceSuggestion[]> {
   const apiKey = getApiKey();
   const url = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
   url.searchParams.set('location', `${origin.latitude},${origin.longitude}`);
@@ -34,10 +151,14 @@ export async function getNearbyPlaces(origin: LatLng): Promise<PlaceSuggestion[]
     throw new DirectionsError(`Could not load nearby places (${data.status ?? 'unknown error'}).`);
   }
 
-  // Nearby Search carries coordinates on every result, so the distance is
-  // measured here rather than asked for - there is no `origin` parameter on
-  // this endpoint the way there is on Autocomplete.
-  const suggestions: PlaceSuggestion[] = (data.results ?? []).map((result: any) => {
+  return toSuggestions(data.results, origin);
+}
+
+// Nearby Search results to suggestions. Coordinates come back on every result,
+// so the distance is measured here rather than asked for - there is no `origin`
+// parameter on this endpoint the way there is on Autocomplete.
+function toSuggestions(results: any, origin: LatLng): PlaceSuggestion[] {
+  const suggestions: PlaceSuggestion[] = (results ?? []).map((result: any) => {
     const location = result.geometry?.location;
     return {
       placeId: result.place_id as string,
@@ -62,7 +183,7 @@ export async function getNearbyPlaces(origin: LatLng): Promise<PlaceSuggestion[]
 // at all, and the only other way to get one would be a Place Details request
 // per suggestion - four or five extra round trips on every keystroke, billed
 // individually. One parameter replaces all of that.
-export async function getPlaceAutocomplete(
+async function getPlaceAutocomplete(
   input: string,
   origin: LatLng,
 ): Promise<PlaceSuggestion[]> {

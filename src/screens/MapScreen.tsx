@@ -20,9 +20,8 @@ import type { RootStackParamList } from '../navigation/RootNavigator';
 import type { LatLng, PlaceSuggestion, RouteSurface, WalkingRoute } from '../types/route';
 import {
   findPlace,
-  getNearbyPlaces,
-  getPlaceAutocomplete,
   getPlaceDetails,
+  getSuggestions,
 } from '../services/directions';
 import { planWalkingRoutes } from '../services/routing';
 import { estimateWalk, routeDurationSeconds, type MobilityAid } from '../services/mobility';
@@ -461,9 +460,7 @@ export function MapScreen() {
     const timeout = setTimeout(
       async () => {
         try {
-          const results = trimmed
-            ? await getPlaceAutocomplete(trimmed, origin)
-            : await getNearbyPlaces(origin);
+          const results = await getSuggestions(trimmed, origin);
           if (!cancelled) setSuggestions(results);
         } catch {
           // Suggestions are best-effort - stay quiet and just show nothing,
@@ -1144,33 +1141,43 @@ export function MapScreen() {
                     accessibilityRole="button"
                     accessibilityLabel={suggestionLabel(item, mobilityAid)}
                   >
-                    <View style={styles.suggestionTop}>
-                      <Text
-                        style={[styles.suggestionName, { color: T.text, fontSize: F.label, flex: 1 }]}
-                        numberOfLines={1}
-                      >
-                        {item.name}
-                      </Text>
-                      {/* The walk, on the right of the name where the eye can
-                          run down the column and compare rows. Prefixed with ~
-                          because it is measured in a straight line and the real
-                          route is longer - see `estimateWalk`. */}
-                      {item.distanceMeters !== undefined && (
-                        <Text
-                          style={[styles.suggestionWalk, { color: T.text2, fontSize: F.xs }]}
-                          numberOfLines={1}
-                        >
-                          {formatWalk(item.distanceMeters, mobilityAid)}
-                        </Text>
-                      )}
-                    </View>
-                    {item.secondaryText && (
-                      <Text
-                        style={[styles.suggestionSecondary, { color: T.text2, fontSize: F.xs }]}
-                        numberOfLines={1}
-                      >
-                        {item.secondaryText}
-                      </Text>
+                    {/* The name gets the whole width. It is the thing being
+                        chosen between, and sharing the line with the walk cost
+                        it characters on exactly the rows where names are
+                        longest and most alike - the branches of one chain. */}
+                    <Text
+                      style={[styles.suggestionName, { color: T.text, fontSize: F.label }]}
+                      numberOfLines={1}
+                    >
+                      {item.name}
+                    </Text>
+                    {(item.secondaryText || item.distanceMeters !== undefined) && (
+                      <View style={styles.suggestionTop}>
+                        {item.secondaryText && (
+                          <Text
+                            style={[styles.suggestionSecondary, { color: T.text2, fontSize: F.xs }]}
+                            numberOfLines={1}
+                          >
+                            {item.secondaryText}
+                          </Text>
+                        )}
+                        {/* Right-aligned so the eye can run straight down the
+                            column and compare rows. Prefixed with ~ because it
+                            is measured in a straight line and the real route is
+                            longer - see `estimateWalk`. */}
+                        {item.distanceMeters !== undefined && (
+                          <Text
+                            // The tab bar's selected blue, so the one accent
+                            // colour on screen means one thing. Follows the
+                            // theme: the token carries a different blue in each
+                            // mode.
+                            style={[styles.suggestionWalk, { color: T.accent, fontSize: F.xs }]}
+                            numberOfLines={1}
+                          >
+                            {formatWalk(item.distanceMeters, mobilityAid)}
+                          </Text>
+                        )}
+                      </View>
                     )}
                   </Pressable>
                 )}
@@ -1323,13 +1330,21 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  suggestionTop: { flexDirection: 'row', alignItems: 'baseline', gap: 10 },
+  // The second line: address on the left, walk on the right. `flex-end` is
+  // what right-aligns the walk on a row that has no address to push it over.
+  suggestionTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 2,
+  },
   suggestionName: { fontWeight: '600' },
-  // Never shrinks: the place name has flex and wins the squeeze, because a
-  // truncated name is still recognisable and a truncated "1.2 km · 18 min" is
-  // not.
+  // Never shrinks: the address has flex and wins the squeeze, because a
+  // truncated address still places the result and a truncated "1.2 km · 18 min"
+  // is not a distance.
   suggestionWalk: { fontWeight: '600', flexShrink: 0 },
-  suggestionSecondary: { marginTop: 2 },
+  suggestionSecondary: { flex: 1 },
   routePanel: {
     position: 'absolute',
     left: SCREEN_MARGIN,
