@@ -73,7 +73,7 @@ export function ARPreviewScreen({ navigation }: Props) {
   return (
     <CameraStage isActive surface={surface}>
       <GroundChevrons anchors={anchors} color={T.green} />
-      <DestinationPin anchors={anchors} label="Destination" color={T.green} />
+      <DestinationPin anchors={anchors} label="Destination" />
 
       <View style={[styles.card, { top: insets.top + SCREEN_MARGIN }]}>
         <Text style={[styles.title, { fontSize: F.body }]}>

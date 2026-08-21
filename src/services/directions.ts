@@ -68,8 +68,30 @@ const PLACE_TYPES: Record<string, string> = {
   university: 'university',
 };
 
+// Words that say "close to where I am" rather than naming anything.
+//
+// Every suggestion this screen returns is already nearest-first from the user's
+// own position, so these ask for something the search does anyway. Left in they
+// do active harm: "bank near me" misses the category map, falls through to a
+// literal keyword search, and Google then matches that phrase against place
+// names - which is a different and worse question than "banks near me".
+const NEARBY_FILLER =
+  /\b(near\s*(me|here|by)?|nearby|closest|close\s*to\s*me|around\s*(me|here)?|in\s*the\s*area)\b/gi;
+
+// What the user meant, with the filler taken out.
+//
+// Used for the keyword too, not only for matching the category map. "near me"
+// is never a useful thing to match against a place name, so a search that falls
+// through to keyword is better off without it either way.
+function normalise(query: string): string {
+  const stripped = query.replace(NEARBY_FILLER, ' ').replace(/\s+/g, ' ').trim();
+  // Someone who typed nothing but filler still meant something by it - keep
+  // the original rather than searching for an empty string.
+  return stripped.length > 0 ? stripped : query.trim();
+}
+
 function placeTypeFor(query: string): string | undefined {
-  return PLACE_TYPES[query.trim().toLowerCase()];
+  return PLACE_TYPES[query.toLowerCase()];
 }
 
 // Suggestions for whatever is in the search bar.
@@ -96,9 +118,17 @@ export async function getSuggestions(
   try {
     const nearby = await searchNearby(trimmed, origin);
     if (nearby.length > 0) return nearby;
-  } catch {
-    // Fall through to Autocomplete, which is a different endpoint and may well
-    // still answer.
+    console.warn(`[places] nearby search for "${trimmed}" found nothing, trying autocomplete`);
+  } catch (error) {
+    // Logged rather than swallowed. The two sources fill the address line from
+    // different fields - Nearby Search from `vicinity`, Autocomplete from
+    // `structured_formatting` - so which one answered is visible in the result
+    // and invisible in the code. A silent fallback makes two searches for the
+    // same place look like two different places.
+    console.warn(
+      `[places] nearby search for "${trimmed}" failed, falling back to autocomplete:`,
+      error instanceof Error ? error.message : error,
+    );
   }
 
   return getPlaceAutocomplete(trimmed, origin);
@@ -118,11 +148,12 @@ async function searchNearby(query: string, origin: LatLng): Promise<PlaceSuggest
   url.searchParams.set('rankby', 'distance');
   url.searchParams.set('key', apiKey);
 
-  const type = placeTypeFor(query);
+  const wanted = normalise(query);
+  const type = placeTypeFor(wanted);
   if (type) {
     url.searchParams.set('type', type);
   } else {
-    url.searchParams.set('keyword', query);
+    url.searchParams.set('keyword', wanted);
   }
 
   const response = await fetch(url.toString());
@@ -154,6 +185,32 @@ async function getNearbyPlaces(origin: LatLng): Promise<PlaceSuggestion[]> {
   return toSuggestions(data.results, origin);
 }
 
+// Roughly where a place is, for results that came back without a `vicinity`.
+//
+// Nearby Search does not return `formatted_address` - that belongs to Text
+// Search - so the best it offers is `vicinity`, a short locality line rather
+// than a full address, and it leaves that out for some results entirely. A row
+// with nothing under the name is the visible result, and on a list of same-name
+// branches the line under the name is the only thing telling them apart.
+//
+// The plus code is the fallback because Google attaches one to almost
+// everything. `compound_code` is a short code followed by the locality -
+// "8HP2+2C Kuala Lumpur, Federal Territory" - and the locality is the useful
+// half, so the code itself is dropped.
+function localityOf(result: any): string | undefined {
+  const compound = result?.plus_code?.compound_code;
+  if (typeof compound !== 'string') return undefined;
+
+  // Split rather than strip: a `compound_code` with no space is a bare plus
+  // code with no locality attached, and "8HP2+2C" under a place name is worse
+  // than the blank line it would be replacing.
+  const space = compound.indexOf(' ');
+  if (space < 0) return undefined;
+
+  const locality = compound.slice(space + 1).trim();
+  return locality.length > 0 ? locality : undefined;
+}
+
 // Nearby Search results to suggestions. Coordinates come back on every result,
 // so the distance is measured here rather than asked for - there is no `origin`
 // parameter on this endpoint the way there is on Autocomplete.
@@ -163,7 +220,7 @@ function toSuggestions(results: any, origin: LatLng): PlaceSuggestion[] {
     return {
       placeId: result.place_id as string,
       name: result.name as string,
-      secondaryText: result.vicinity as string | undefined,
+      secondaryText: (result.vicinity as string | undefined) ?? localityOf(result),
       distanceMeters:
         typeof location?.lat === 'number' && typeof location?.lng === 'number'
           ? distanceMeters(origin, { latitude: location.lat, longitude: location.lng })

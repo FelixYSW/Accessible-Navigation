@@ -553,7 +553,6 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           <DestinationPin
             anchors={projectedAnchors}
             label={walkingRoute.destinationName}
-            color={T.green}
           />
         </>
       )}
