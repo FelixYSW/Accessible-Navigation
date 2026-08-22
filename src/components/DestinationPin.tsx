@@ -28,7 +28,7 @@ const PIN_HEIGHT_UNITS = 36;
 // screen that means "the thing you are walking to", and it is the only place
 // the walker sees this shape - a red pin is what everyone already reads as a
 // destination, and matching the guidance colour would make it one more green
-// thing among the chevrons.
+// thing among the guidance.
 const PIN_RED = '#E5202E';
 const HOLE_RADIUS = 6;
 
@@ -99,7 +99,7 @@ export function DestinationPin({ anchors, label }: DestinationPinProps) {
   return (
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
       <G transform={`translate(${pin.x.toFixed(1)}, ${pin.y.toFixed(1)}) scale(${scale.toFixed(3)})`}>
-        {/* Dark edge for the same reason the chevrons have one: this has to
+        {/* Dark edge for the same reason the band has one: this has to
             read against a bright pavement and a dark doorway alike. */}
         <Path d={PIN_PATH} fill={PIN_RED} stroke="rgba(0,0,0,0.55)" strokeWidth={2.5} />
         <Circle cx={0} cy={-24} r={HOLE_RADIUS} fill="#ffffff" />

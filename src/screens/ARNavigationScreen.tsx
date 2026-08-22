@@ -30,7 +30,7 @@ import { useSpokenHazardCues, useSpokenTurnCues } from '../services/voiceCues';
 import { AppIcon } from '../components/AppIcon';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
-import { GroundChevrons } from '../components/GroundChevrons';
+import { GroundPath } from '../components/GroundPath';
 import { DestinationPin } from '../components/DestinationPin';
 import {
   MANEUVER_ICONS,
@@ -64,43 +64,52 @@ const PITCH_SMOOTHING = 0.25;
 // topmost thing on this screen.
 const BANNER_TOP_GAP = 4;
 
-// Where the anchored chevrons are planted along the route: a close, tight run
+// Where the anchored path is threaded along the route: a close, tight run
 // starting just in front of the walker's feet.
 //
 // The spacing is what decides how near the first one can be. Anchors sit on a
 // fixed lattice measured from the route's start, so the nearest one lands
 // anywhere between the lead distance and one spacing beyond it - at 2m spacing
-// that meant the first chevron could be three and a half metres off, which
+// that meant the path could start three and a half metres off, which
 // reads as the run starting somewhere up the street rather than at your feet.
 //
 // The horizon is set by what a flat shape on the ground can still say, not by
-// how far ahead the route is known. Past about eight metres a chevron lying on
-// the pavement has foreshortened into a bar a few points deep - it is still
-// drawn, still fading, still costing a projection every frame, and it no longer
-// reads as an arrow pointing anywhere. The native side now grows the far ones
-// to hold that off (see GroundChevron.maxScale), and this is where that stops
-// being enough. The compass-drawn fallback has always stopped at five.
+// how far ahead the route is known. Past about eight metres a band lying on the
+// pavement has narrowed to a few points of screen - still drawn, still fading,
+// still costing two projections a frame, and no longer saying anything about
+// direction that the nearer half has not said already. The compass-drawn
+// fallback is cut at six for the same reason.
+// There is deliberately no lead distance any more. A gap used to be left around
+// the walker, on the reasoning that a chevron under your own feet is not
+// guidance - true of a chevron, and wrong for a band, which is one shape and now
+// has to run continuously *through* where they are standing. That is where the
+// live half and the covered half meet, and a hole there would show as the band
+// breaking apart around them. Points that end up genuinely underfoot are dealt
+// with where they should be, by the near-plane clip on the native side.
 const ANCHOR_SPACING_M = 1.2;
-const ANCHOR_LEAD_M = 0.8;
 const ANCHOR_HORIZON_M = 8;
 
-// How far *behind* the walker's position along the route to start looking for
-// anchors, before filtering by true distance.
+// How far *behind* the walker's position along the route to keep anchoring.
 //
-// Rounding a corner is why this exists. The walker's place on the route is
-// found by projecting them onto it, and on the outside of a turn that
+// Rounding a corner is why this started at 2.5m. The walker's place on the route
+// is found by projecting them onto it, and on the outside of a turn that
 // projection sticks to the corner vertex while they keep moving - so measuring
-// the run from it leaves the nearest chevron several metres ahead just as they
-// need it most. Reaching back a little and then filtering on real distance
-// closes that gap. On a straight stretch the extra points fall behind the
-// camera and are never drawn.
-const ANCHOR_LOOKBACK_M = 2.5;
+// the run from it leaves the near end of the band several metres ahead just as
+// they need it most. Reaching back a little closes that gap.
+//
+// It now reaches back further, because the stretch behind the walker is drawn
+// as covered ground rather than thrown away, and two and a half metres of it is
+// not enough to recognise as anything when they turn round. Eight is roughly a
+// junction's worth: enough that looking back at one shows which arm was come
+// from. The cost is real but small - these are anchors ARKit is already tracking
+// as the walker passes them, and they retire on the same schedule as before.
+const ANCHOR_LOOKBACK_M = 8;
 
 // How far the run may be shifted sideways to sit under the walker, and how much
 // that shift has to change before it is worth re-planting the anchors.
 //
 // Walking routes are drawn down the middle of the road, not along the pavement
-// anyone actually walks on, so chevrons laid exactly on the route line appear
+// anyone actually walks on, so a band laid exactly on the route line appears
 // out in the traffic or across the street. Shifting the whole visible run by
 // the walker's own offset from that line puts it back on the pavement they are
 // standing on.
@@ -183,7 +192,7 @@ function offsetKeyFor(lateralMeters: number): number {
 //
 // Five metres was too loose, and field-walking a route showed why. Five metres
 // is wider than the road: at that accuracy the fix cannot tell which pavement
-// the walker is on, so the chevrons were being planted - confidently, and held
+// the walker is on, so the path was being planted - confidently, and held
 // rock-steady by ARKit once down - out in the traffic or on the far side of the
 // street. Three is roughly what ARCore reports once VPS has actually localised
 // against Street View imagery, and above it the pose is really the phone's own
@@ -200,7 +209,7 @@ const TRUST_ANCHORS_HEADING_DEG = 15;
 // rather than equal to them.
 //
 // Reported accuracy wanders continuously, so a single threshold would be
-// crossed back and forth while walking, and each crossing swaps the chevrons
+// crossed back and forth while walking, and each crossing swaps the path
 // between two sources that disagree by metres. The walker would read that as
 // the arrows jumping, which is the fault this whole change exists to remove. A
 // gap between switching on and switching off means the pose has to genuinely
@@ -273,7 +282,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // and the tilt is zero. So tilt is what's left of a right angle.
   //
   // Low-pass filtered, because raw attitude jitters by a degree or two even
-  // held still, and a jittering tilt makes the whole run of chevrons shiver.
+  // held still, and a jittering tilt makes the whole band shiver.
   useEffect(() => {
     DeviceMotion.setUpdateInterval(PITCH_UPDATE_MS);
     const subscription = DeviceMotion.addListener(({ rotation }) => {
@@ -284,7 +293,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     return () => subscription.remove();
   }, []);
 
-  // Whether to draw the anchored chevrons or fall back to the compass-drawn
+  // Whether to draw the anchored path or fall back to the compass-drawn
   // ones. Both readings matter: the position fixes where the anchors go, and
   // the heading fixes which way the AR session thinks north is - a yaw error
   // swings the whole run of them sideways even when each is individually held
@@ -357,7 +366,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // Nothing is drawn over the camera while the scan prompt is up.
   //
   // The prompt asks the user to point the phone at the buildings around them.
-  // Chevrons on the pavement and boxes round potholes are both answers to a
+  // A path on the pavement and boxes round potholes are both answers to a
   // different question - "where do I walk" - and putting them on screen while
   // the app is still asking for something contradicts the request and buries
   // the thing that is being asked about.
@@ -375,7 +384,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // Where the anchors are measured from.
   //
   // The AR session's own fix, not the phone's, whenever it is trustworthy. This
-  // is the single most important line for how the chevrons look: ARCore
+  // is the single most important line for how the path looks: ARCore
   // localises to well under a metre where the GPS fix is five to ten, and since
   // the run is laid out relative to where the walker is, a fix that says they
   // are eight metres back puts the whole run eight metres too far up the road.
@@ -456,21 +465,16 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         index * ANCHOR_SPACING_M,
         pathOffset,
       );
-      // Undefined means the route has run out, so the run of chevrons stops at
+      // Undefined means the route has run out, so the band stops at
       // the destination instead of pointing past it.
       if (!point) break;
-
-      // Measured from the walker, not along the route. A chevron under their
-      // own feet is not guidance, and around a corner the two distances differ
-      // by several metres.
-      if (distanceMeters(anchorOrigin, point) < ANCHOR_LEAD_M) continue;
 
       planted.push({ id: index + shift, latitude: point.latitude, longitude: point.longitude });
     }
 
     // The destination itself, once it is close enough to point at with any
     // authority. Anchored on its true coordinate with no pavement shift: the
-    // chevrons are shifted because a route line is a rough guide to which side
+    // the band is shifted because a route line is a rough guide to which side
     // of the road to walk on, but the destination is an actual place.
     if (distanceMeters(anchorOrigin, walkingRoute.destination) <= DESTINATION_ANCHOR_RANGE_M) {
       planted.push({
@@ -586,7 +590,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   // ARKit runs the camera where it exists, because only one thing can hold it
   // and the arrows need the pose. Elsewhere the plain preview stands in, and
-  // the chevrons fall back to being drawn from the compass.
+  // the path falls back to being drawn from the compass.
   const surface = isARGeospatialSupported ? (
     <ARGeospatialView
       style={StyleSheet.absoluteFill}
@@ -601,9 +605,9 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   return (
     <CameraStage isActive surface={surface}>
       {/* Under the hazard overlay: a hazard on the path is the more urgent of
-          the two, and must never end up behind a chevron pointing at it.
+          the two, and must never end up behind the band leading to it.
 
-          One of the two, never both - they draw the same run of chevrons from
+          One of the two, never both - they draw the same band from
           different sources, and showing them together would read as a double
           image wherever the two disagreed, which is precisely where it would
           matter most.
@@ -614,8 +618,8 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           a case that can happen. */}
       {anchorsTrusted && (
         <>
-          <GroundChevrons anchors={projectedAnchors} color={T.green} />
-          {/* Over the chevrons: the run leads to the pin, so the pin should
+          <GroundPath anchors={projectedAnchors} color={T.green} />
+          {/* Over the band: the path leads to the pin, so the pin should
               never be behind it. */}
           <DestinationPin
             anchors={projectedAnchors}

@@ -7,10 +7,13 @@ import {
   ARGeospatialView,
   isARGeospatialSupported,
   type PreviewComponent,
+  type PreviewRenderer,
+  type PreviewState,
   type ProjectedAnchor,
 } from '../../modules/ar-geospatial';
+import { ARScanOverlay } from '../components/ARScanOverlay';
 import { CameraStage } from '../components/CameraStage';
-import { GroundChevrons } from '../components/GroundChevrons';
+import { GroundPath } from '../components/GroundPath';
 import { DestinationPin } from '../components/DestinationPin';
 import { useSettings } from '../theme/SettingsContext';
 import { OVERLAY_PILL_HEIGHT, OVERLAY_RED, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -20,19 +23,35 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ARPreview'>;
 // Every component that can be placed by hand, and what each is for.
 //
 // The list is short because only two things in this app are drawn at a fixed
-// point in the world. The compass arrows follow the camera and the hazard boxes
-// follow the detector, so neither is a thing you can put somewhere.
+// point in the world - the guidance band and the destination pin. The compass
+// band follows the camera and the hazard boxes follow the detector, so neither
+// is a thing you can put somewhere. Path and Turn are the same component; they
+// differ only in the shape of the run a tap lays down.
 const COMPONENTS: { key: PreviewComponent; label: string; hint: string }[] = [
-  { key: 'chevron', label: 'Chevron', hint: 'One arrow, facing away from you' },
-  { key: 'trail', label: 'Trail', hint: 'Eight arrows leading away, as on a route' },
+  { key: 'path', label: 'Path', hint: 'A stretch of the guidance band, leading away from you' },
+  { key: 'turn', label: 'Turn', hint: 'The same band with a right-angle corner halfway along' },
   { key: 'pin', label: 'Pin', hint: 'The destination marker' },
+];
+
+// The two ways of drawing it, so they can be compared on a real floor.
+//
+// "Scene" is 3D geometry inside the AR session, drawn by SceneKit in the same
+// pass as the camera image. "Overlay" is what the navigation screen ships: the
+// shape is projected to screen coordinates natively, sent to JS, and drawn in
+// SVG on top of the camera preview - which costs a bridge hop and a React render
+// before any of it appears, so it is always a frame or two behind the picture it
+// is lying on. That lag is what makes an overlay slide when the phone moves, and
+// it is the thing this comparison exists to show.
+const RENDERERS: { key: PreviewRenderer; label: string; hint: string }[] = [
+  { key: 'scene', label: 'Scene', hint: '3D geometry inside the AR session' },
+  { key: 'overlay', label: 'Overlay', hint: 'Drawn on top of the camera, as the route screen does' },
 ];
 
 // A sandbox for the AR guidance: choose a component, tap the floor, and it
 // appears exactly where you tapped.
 //
 // It exists because the guidance is otherwise only reachable by planning a real
-// route and walking it, which is a slow way to answer "does this chevron look
+// route and walking it, which is a slow way to answer "does this path look
 // right" - and impossible at a desk. Everything here runs on ARKit alone, with
 // no API key passed and therefore no Geospatial session, so it works indoors,
 // underground, and anywhere Street View has never been.
@@ -45,8 +64,13 @@ export function ARPreviewScreen({ navigation }: Props) {
   const { T, F } = useSettings();
 
   const [anchors, setAnchors] = useState<ProjectedAnchor[]>([]);
-  const [component, setComponent] = useState<PreviewComponent>('chevron');
+  const [component, setComponent] = useState<PreviewComponent>('path');
+  const [renderer, setRenderer] = useState<PreviewRenderer>('scene');
   const [clearToken, setClearToken] = useState(0);
+  // How many things are down comes from the native side rather than from the
+  // length of `anchors`, because under the scene renderer that list is empty by
+  // design - the scene is drawing the band, so nothing is sent over to draw.
+  const [state, setState] = useState<PreviewState>({ ready: false, placed: 0 });
 
   const handleAnchorsUpdate = useCallback(
     (event: { nativeEvent: { anchors: ProjectedAnchor[] } }) =>
@@ -54,7 +78,12 @@ export function ARPreviewScreen({ navigation }: Props) {
     [],
   );
 
-  const placed = anchors.length > 0;
+  const handlePreviewState = useCallback(
+    (event: { nativeEvent: PreviewState }) => setState(event.nativeEvent),
+    [],
+  );
+
+  const placed = state.placed > 0;
   const chosen = COMPONENTS.find((entry) => entry.key === component);
 
   // No `apiKey` prop, deliberately. Passing one would start a Geospatial
@@ -65,15 +94,22 @@ export function ARPreviewScreen({ navigation }: Props) {
       style={StyleSheet.absoluteFill}
       previewMode
       previewComponent={component}
+      previewRenderer={renderer}
       previewClearToken={clearToken}
       onAnchorsUpdate={handleAnchorsUpdate}
+      onPreviewState={handlePreviewState}
     />
   ) : undefined;
 
   return (
     <CameraStage isActive surface={surface}>
-      <GroundChevrons anchors={anchors} color={T.green} />
+      <GroundPath anchors={anchors} color={T.green} />
       <DestinationPin anchors={anchors} label="Destination" />
+
+      {/* Over the guidance and under the controls: it is telling the user the
+          screen is not ready yet, so it must cover what is not ready without
+          burying the way out. */}
+      <ARScanOverlay ready={state.ready} supported={isARGeospatialSupported} />
 
       <View style={[styles.card, { top: insets.top + SCREEN_MARGIN }]}>
         <Text style={[styles.title, { fontSize: F.body }]}>
@@ -84,7 +120,7 @@ export function ARPreviewScreen({ navigation }: Props) {
             ? 'This device has no ARKit support, so the guidance cannot be previewed here.'
             : placed
               ? `${chosen?.hint}. Walk around what you have placed to check that it stays put.`
-              : 'Point the camera at the floor a couple of metres ahead, give it a moment to find a surface, then tap.'}
+              : 'Tap the floor a couple of metres ahead of you.'}
         </Text>
       </View>
 
@@ -107,6 +143,35 @@ export function ARPreviewScreen({ navigation }: Props) {
                     styles.segmentLabel,
                     { fontSize: F.micro },
                     entry.key === component && { color: T.green },
+                  ]}
+                >
+                  {entry.label}
+                </Text>
+              </Pressable>
+            </React.Fragment>
+          ))}
+        </View>
+
+        {/* The two renderers, side by side on the same floor.
+            Which one is better is not really arguable in the abstract - it is a
+            question about how a moving phone feels, and the only honest way to
+            answer it is to put both on the same pavement and switch. */}
+        <View style={styles.picker}>
+          {RENDERERS.map((entry, index) => (
+            <React.Fragment key={entry.key}>
+              {index > 0 && <View style={styles.divider} />}
+              <Pressable
+                onPress={() => setRenderer(entry.key)}
+                style={[styles.segment, { minHeight: F.micro * 3 }]}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: entry.key === renderer }}
+                accessibilityLabel={`${entry.label}. ${entry.hint}`}
+              >
+                <Text
+                  style={[
+                    styles.segmentLabel,
+                    { fontSize: F.micro },
+                    entry.key === renderer && { color: T.green },
                   ]}
                 >
                   {entry.label}

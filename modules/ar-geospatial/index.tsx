@@ -30,7 +30,7 @@ export interface GeospatialUpdate {
  *  advances, would move anchors that should have stayed put. */
 export interface GeoAnchor {
   id: number;
-  /** `route` points carry the ground chevrons and are chained together to work
+  /** `route` points are threaded together into the ground band and chained to work
    *  out which way the run faces. `destination` is a single marker at the end
    *  of the journey, drawn as an upright pin and deliberately kept out of that
    *  chain. Defaults to `route`. */
@@ -39,28 +39,38 @@ export interface GeoAnchor {
   longitude: number;
 }
 
-/** One anchor, projected to where it appears on screen. */
+/** One thing the AR session drew this frame, projected to where it appears on
+ *  screen. Mostly anchors; `path` is the exception. */
 export interface ProjectedAnchor {
-  /** The `id` it was requested under, for route points. */
+  /** The `id` it was requested under, for route points. Paths carry an id of
+   *  their own instead - there is one per run, not one per anchor. */
   index: number;
-  /** `local` anchors are plain ARKit ones, planted ahead of wherever the phone
+  /** `path` is the ground ribbon ahead of the walker and `path-walked` the
+   *  stretch behind them, cut apart where they are standing. The two are drawn
+   *  in different colours and are otherwise identical. They are the only kinds
+   *  that carry an `outline`.
+   *
+   *  `local` anchors are plain ARKit ones, planted ahead of wherever the phone
    *  was when tracking started. They need no VPS, GPS or coverage of any kind,
    *  so they work indoors - they are the control for judging whether the
-   *  tracking itself holds still. `geospatial` anchors are pinned to real
-   *  coordinates and only appear once Earth is localised. */
-  kind: 'local' | 'geospatial' | 'destination';
+   *  tracking itself holds still. `destination` is pinned to a real coordinate
+   *  and only appears once Earth is localised. */
+  kind: 'local' | 'path' | 'path-walked' | 'destination';
   x: number;
   y: number;
-  /** Metres from the camera. */
+  /** Metres from the camera. For a path, to its nearest point. */
   distance: number;
   /** False when it is behind the camera. */
   visible: boolean;
-  /** The six screen corners of the chevron lying on the ground at this point,
-   *  flattened to `[x0, y0, x1, y1, ...]`, turned to face the next point along
-   *  the route. Absent on control anchors, and on any chevron with a corner
-   *  behind the lens - a half-projected polygon is a torn one, not a small
-   *  one. */
+  /** The screen corners of the ground ribbon, flattened to
+   *  `[x0, y0, x1, y1, ...]`: one edge from near to far, then the other from
+   *  far back to near, so the two close into a single polygon. Present only on
+   *  the path kinds. */
   outline?: number[];
+  /** The direction triangles lying in the band, flattened to
+   *  `[x0, y0, x1, y1, x2, y2, ...]` - six numbers per triangle, first corner
+   *  the tip. Absent when none of them is fully in front of the lens. */
+  markers?: number[];
 }
 
 /** One detection, straight off the model. Deliberately not `HazardDetection`
@@ -90,10 +100,43 @@ export interface HazardsEvent {
 /** The components that can be placed by hand in preview mode.
  *
  *  Only two things in this app are drawn at a fixed point in the world: the
- *  ground chevron and the destination pin. The compass arrows are relative to
- *  the camera and the hazard boxes come from the detector, so neither can be
- *  put anywhere. "trail" is the chevron again, laid out as a route would. */
-export type PreviewComponent = 'chevron' | 'trail' | 'pin';
+ *  ground path and the destination pin. The compass band is relative to the
+ *  camera and the hazard boxes come from the detector, so neither can be put
+ *  anywhere.
+ *
+ *  A tap in "path" mode lays a stretch of ribbon at the same anchor spacing a
+ *  real route uses, so what is being looked at is the real thing at its real
+ *  density. "turn" is the same run with a right-angle corner halfway along -
+ *  the one shape a straight stretch cannot show, and the one most likely to
+ *  look wrong. There is no single-element option: the band has no elements to
+ *  place one of. */
+export type PreviewComponent = 'path' | 'turn' | 'pin';
+
+/** Which renderer draws the guidance in preview mode.
+ *
+ *  `scene` builds it as SceneKit geometry inside the AR session, so it is
+ *  rasterised in the same pass as the camera image and cannot be a frame
+ *  behind it. `overlay` is the shipping path: the native side projects the
+ *  shape to screen coordinates and `GroundPath` draws them in SVG on top of
+ *  the preview, which costs a bridge hop and a React render before anything
+ *  appears - and that delay is what stops it feeling attached to the ground.
+ *
+ *  Both exist so the two can be put side by side on a real pavement, which is
+ *  the only place the trade between them can honestly be judged. */
+export type PreviewRenderer = 'scene' | 'overlay';
+
+/** What preview mode can currently do, and what is currently down. */
+export interface PreviewState {
+  /** True once the camera is tracking normally *and* a raycast into the middle
+   *  of the frame finds a surface - which is the same test a tap runs, so what
+   *  the screen promises and what a tap can do cannot come apart. */
+  ready: boolean;
+  /** How many things have been placed. Reported from the native side because
+   *  the `scene` renderer sends no anchors over at all - it draws them itself -
+   *  so counting the anchor list would report nothing however many taps had
+   *  landed. */
+  placed: number;
+}
 
 export interface ARGeospatialViewProps extends ViewProps {
   /** Both optional because `previewMode` needs neither: it plants its run on
@@ -111,11 +154,15 @@ export interface ARGeospatialViewProps extends ViewProps {
   previewMode?: boolean;
   /** What the next tap puts down. */
   previewComponent?: PreviewComponent;
+  /** Which renderer draws it. */
+  previewRenderer?: PreviewRenderer;
   /** Any change removes everything placed so far. The value means nothing. */
   previewClearToken?: number;
   onGeospatialUpdate?: (event: { nativeEvent: GeospatialUpdate }) => void;
   onAnchorsUpdate?: (event: { nativeEvent: { anchors: ProjectedAnchor[] } }) => void;
   onHazards?: (event: { nativeEvent: HazardsEvent }) => void;
+  /** Preview mode only. Fires when the answer changes, not per frame. */
+  onPreviewState?: (event: { nativeEvent: PreviewState }) => void;
 }
 
 export interface HazardCameraViewProps extends ViewProps {
