@@ -1,6 +1,6 @@
 import React from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Volume2, VolumeX } from 'lucide-react-native';
+import { AppIcon } from './AppIcon';
 import { useToggleProgress } from './useToggleProgress';
 import { useSettings } from '../theme/SettingsContext';
 import { OVERLAY_GREEN, OVERLAY_PILL_HEIGHT, OVERLAY_RED } from '../theme/tokens';
@@ -78,7 +78,7 @@ function CueSegment({ cue }: { cue: VoiceCue }) {
           them as they fade. */}
       <View style={{ height: size, width: size }}>
         <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
-          <Volume2 size={size} color={OVERLAY_GREEN} strokeWidth={2.4} />
+          <AppIcon name="volume-on" size={size} color={OVERLAY_GREEN} />
         </Animated.View>
         <Animated.View
           style={[
@@ -86,7 +86,7 @@ function CueSegment({ cue }: { cue: VoiceCue }) {
             { opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
           ]}
         >
-          <VolumeX size={size} color={OVERLAY_RED} strokeWidth={2.4} />
+          <AppIcon name="volume-off" size={size} color={OVERLAY_RED} />
         </Animated.View>
       </View>
       <Text style={[styles.label, { fontSize: F.micro }]} numberOfLines={1}>

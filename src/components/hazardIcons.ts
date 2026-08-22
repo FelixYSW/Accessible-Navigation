@@ -1,21 +1,17 @@
-import {
-  Construction,
-  Droplets,
-  TriangleAlert,
-  WavesHorizontal,
-  type LucideIcon,
-} from 'lucide-react-native';
+import type { AppIconName } from './AppIcon';
 import type { HazardClass } from '../types/hazard';
 
 // One icon per hazard class, shared by the Settings rows, the camera
 // detection chips and the Hazard Detection legend, so a colour/icon pairing
 // the user learns in one place reads the same everywhere.
 //
-// `WavesHorizontal` is lucide v1's name for the icon previously published as
-// `waves` (three horizontal wavy lines), which is what the design specifies.
-export const HAZARD_ICONS: Record<HazardClass, LucideIcon> = {
-  pothole: TriangleAlert,
-  'slippery-surface': Droplets,
-  'broken-tactile-paving': WavesHorizontal,
-  'pathway-obstruction': Construction,
+// Names rather than components now that icons resolve through `AppIcon`, which
+// draws an SF Symbol on iOS and the lucide icon it replaced everywhere else.
+// The pairings are unchanged: `waves` is still the three wavy lines the design
+// specifies for a broken surface, and `construction` is still the traffic cone.
+export const HAZARD_ICONS: Record<HazardClass, AppIconName> = {
+  pothole: 'triangle-alert',
+  'slippery-surface': 'droplets',
+  'broken-tactile-paving': 'waves',
+  'pathway-obstruction': 'construction',
 };

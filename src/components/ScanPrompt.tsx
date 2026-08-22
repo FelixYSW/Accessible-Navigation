@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Radar } from 'lucide-react-native';
+import { AppIcon } from './AppIcon';
 import { useSettings } from '../theme/SettingsContext';
 import { RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 
@@ -63,10 +63,10 @@ export function ScanPrompt({
     <View style={styles.scrim} pointerEvents="none">
       <View style={styles.card}>
         <View style={styles.icon}>
-          <Radar
+          <AppIcon
+            name="radar"
             size={scaled(40)}
             color={hopeless ? 'rgba(255,255,255,0.7)' : T.green}
-            strokeWidth={2}
           />
         </View>
 

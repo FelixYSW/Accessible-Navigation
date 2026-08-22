@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
-import { ChevronDown, ChevronUp } from 'lucide-react-native';
+import { AppIcon } from './AppIcon';
 import { HAZARD_ICONS } from './hazardIcons';
 import { useToggleProgress } from './useToggleProgress';
 import { useSettings } from '../theme/SettingsContext';
@@ -41,7 +41,7 @@ export function HazardTypeBar() {
 
   // Up when closed, down when open: the chevron points the way the panel will
   // move, not the way it already sits.
-  const Chevron = open ? ChevronDown : ChevronUp;
+  const chevron = open ? 'chevron-down' : 'chevron-up';
 
   return (
     // alignItems: stretch is what makes the panel and the header the same
@@ -63,16 +63,16 @@ export function HazardTypeBar() {
           Hazard types
         </Text>
         <MiniSwitch value={anyOn} onChange={setAllHazards} label="All hazard types" />
-        <Chevron size={scaled(14)} color="rgba(255,255,255,0.7)" strokeWidth={2.4} />
+        <AppIcon name={chevron} size={scaled(14)} color="rgba(255,255,255,0.7)" />
       </Pressable>
 
       {open && (
         <View style={styles.panel}>
           {HAZARD_CLASSES.map((hazardClass) => {
-            const Icon = HAZARD_ICONS[hazardClass];
+            const icon = HAZARD_ICONS[hazardClass];
             return (
               <View key={hazardClass} style={styles.row}>
-                <Icon size={scaled(15)} color={HAZARD_COLORS[hazardClass]} strokeWidth={2.4} />
+                <AppIcon name={icon} size={scaled(15)} color={HAZARD_COLORS[hazardClass]} />
                 <Text style={[styles.rowLabel, { fontSize: F.micro }]} numberOfLines={1}>
                   {HAZARD_COMPACT_LABELS[hazardClass]}
                 </Text>

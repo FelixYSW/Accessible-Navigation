@@ -4,8 +4,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
-import { Rabbit, Turtle } from 'lucide-react-native';
 import { SegmentedField } from '../components/SegmentedField';
+import { AppIcon } from '../components/AppIcon';
 import { HAZARD_ICONS } from '../components/hazardIcons';
 import { useSettings } from '../theme/SettingsContext';
 import {
@@ -149,7 +149,7 @@ export function SettingsScreen() {
             accessible
             accessibilityLabel="Ordered from fastest to slowest"
           >
-            <Rabbit size={scaled(18)} color={T.text2} strokeWidth={2} />
+            <AppIcon name="rabbit" size={scaled(18)} color={T.text2} />
             <View style={styles.paceDots}>
               {PACE_DOTS.map((dot) => (
                 <View
@@ -166,7 +166,7 @@ export function SettingsScreen() {
                 />
               ))}
             </View>
-            <Turtle size={scaled(18)} color={T.text2} strokeWidth={2} />
+            <AppIcon name="turtle" size={scaled(18)} color={T.text2} />
           </View>
           <SegmentedField
             values={MOBILITY_AIDS.map((aid) => MOBILITY_AID_LABELS[aid])}
@@ -241,7 +241,7 @@ export function SettingsScreen() {
         {HAZARD_CLASSES.map((hazardClass) => {
           const active = hazardActive[hazardClass];
           const color = HAZARD_COLORS[hazardClass];
-          const Icon = HAZARD_ICONS[hazardClass];
+          const icon = HAZARD_ICONS[hazardClass];
           const label = HAZARD_SETTING_LABELS[hazardClass];
 
           return (
@@ -267,7 +267,7 @@ export function SettingsScreen() {
                       { backgroundColor: color, borderRadius: scaled(9) },
                     ]}
                   />
-                  <Icon size={scaled(18)} color={color} strokeWidth={2} />
+                  <AppIcon name={icon} size={scaled(18)} color={color} />
                 </View>
                 <Text style={[styles.hazardLabel, { color: T.text, fontSize: F.label }]}>
                   {label}

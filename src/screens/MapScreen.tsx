@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import { Crosshair } from 'lucide-react-native';
+import { AppIcon } from '../components/AppIcon';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -1042,7 +1042,7 @@ export function MapScreen() {
           accessibilityLabel={previewing ? 'Show the whole route' : 'Recentre on my location'}
           hitSlop={8}
         >
-          <Crosshair size={scaled(22)} color={T.accent} strokeWidth={2} />
+          <AppIcon name="crosshair" size={scaled(22)} color={T.accent} />
         </Pressable>
       )}
 

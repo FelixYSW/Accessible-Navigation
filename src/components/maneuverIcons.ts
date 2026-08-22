@@ -1,17 +1,4 @@
-import {
-  ArrowUp,
-  ArrowUpLeft,
-  ArrowUpRight,
-  Compass,
-  CornerLeftDown,
-  CornerRightDown,
-  CornerUpLeft,
-  CornerUpRight,
-  IterationCcw,
-  IterationCw,
-  MapPin,
-  type LucideIcon,
-} from 'lucide-react-native';
+import type { AppIconName } from './AppIcon';
 
 // The manoeuvres the navigation banner can show, and one fixed glyph for each.
 //
@@ -34,21 +21,23 @@ export type Maneuver =
   | 'arrive'
   | 'locating';
 
-export const MANEUVER_ICONS: Record<Maneuver, LucideIcon> = {
-  straight: ArrowUp,
-  'slight-left': ArrowUpLeft,
-  'slight-right': ArrowUpRight,
-  left: CornerUpLeft,
-  right: CornerUpRight,
+// Names rather than components, resolved by `AppIcon` into an SF Symbol on iOS
+// and the lucide icon it replaced elsewhere. The glyph choices are unchanged.
+export const MANEUVER_ICONS: Record<Maneuver, AppIconName> = {
+  straight: 'arrow-up',
+  'slight-left': 'arrow-up-left',
+  'slight-right': 'arrow-up-right',
+  left: 'corner-up-left',
+  right: 'corner-up-right',
   // A corner turning downwards reads as swinging back past square, which is
   // what a sharp turn is.
-  'sharp-left': CornerLeftDown,
-  'sharp-right': CornerRightDown,
+  'sharp-left': 'corner-left-down',
+  'sharp-right': 'corner-right-down',
   // A loop that leaves upwards and returns downwards - the standard U-turn.
-  'uturn-left': IterationCcw,
-  'uturn-right': IterationCw,
-  arrive: MapPin,
-  locating: Compass,
+  'uturn-left': 'uturn-left',
+  'uturn-right': 'uturn-right',
+  arrive: 'map-pin',
+  locating: 'compass',
 };
 
 export const MANEUVER_LABELS: Record<Maneuver, string> = {

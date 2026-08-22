@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useTheme } from '../theme/SettingsContext';
 import { HAZARD_COLORS } from '../theme/tokens';
 import { HAZARD_LABELS, type HazardDetection } from '../types/hazard';
+import { AppIcon } from './AppIcon';
 import { HAZARD_ICONS } from './hazardIcons';
 
 // Height reserved above each box for its label chip, so the chip clears the
@@ -28,7 +29,7 @@ export function HazardOverlay({ detections }: HazardOverlayProps) {
       {detections.map((detection) => {
         const box = detection.boundingBox;
         const color = HAZARD_COLORS[detection.hazardClass];
-        const Icon = HAZARD_ICONS[detection.hazardClass];
+        const icon = HAZARD_ICONS[detection.hazardClass];
         const left = box.x * width;
         const top = box.y * height;
 
@@ -57,7 +58,7 @@ export function HazardOverlay({ detections }: HazardOverlayProps) {
                 { left, top: top >= chipOffset ? top - chipOffset : top + 4 },
               ]}
             >
-              <Icon size={scaled(13)} color={color} strokeWidth={2.2} />
+              <AppIcon name={icon} size={scaled(13)} color={color} />
               <Text style={[styles.chipText, { fontSize: F.tiny }]} numberOfLines={1}>
                 {HAZARD_LABELS[detection.hazardClass]} {Math.round(detection.confidence * 100)}%
               </Text>

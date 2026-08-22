@@ -27,6 +27,7 @@ import {
 } from '../../modules/ar-geospatial';
 import { useHazardDetections } from '../services/hazardDetector';
 import { useSpokenHazardCues, useSpokenTurnCues } from '../services/voiceCues';
+import { AppIcon } from '../components/AppIcon';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
 import { GroundChevrons } from '../components/GroundChevrons';
@@ -485,7 +486,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     step && !nextStep
       ? 'arrive'
       : (maneuverFromApi(nextStep?.maneuver) ?? maneuverFromAngle(turnAngle));
-  const ManeuverIcon = MANEUVER_ICONS[maneuver];
+  const maneuverIcon = MANEUVER_ICONS[maneuver];
   // The road being turned onto, which is the one worth naming while
   // approaching a corner. Falls back to the road underfoot on the last leg,
   // where there is nothing left to turn onto.
@@ -604,7 +605,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         style={[styles.banner, { top: insets.top + BANNER_TOP_GAP }]}
         onLayout={(e) => setBannerHeight(e.nativeEvent.layout.height)}
       >
-        <ManeuverIcon size={scaled(46)} color="#fff" strokeWidth={2.2} />
+        <AppIcon name={maneuverIcon} size={scaled(46)} color="#fff" />
         <View style={styles.bannerText}>
           <Text style={[styles.bannerDistance, { fontSize: F.h1 }]} numberOfLines={1}>
             {metersToManeuver !== undefined ? formatDistance(metersToManeuver) : '—'}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { ScanEye } from 'lucide-react-native';
+import { AppIcon } from './AppIcon';
 import { useSettings } from '../theme/SettingsContext';
 import { OVERLAY_RED, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 
@@ -41,10 +41,10 @@ export function HazardIntro({ visible, error, onDismiss }: HazardIntroProps) {
     <View style={styles.scrim}>
       <View style={styles.card}>
         <View style={styles.icon}>
-          <ScanEye
+          <AppIcon
+            name="scan-eye"
             size={scaled(40)}
             color={error ? OVERLAY_RED : T.green}
-            strokeWidth={2}
           />
         </View>
 
