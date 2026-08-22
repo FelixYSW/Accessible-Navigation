@@ -233,8 +233,7 @@ enum GroundPath {
   /// is accurate to - and present only so coplanar surfaces cannot flicker.
   static let layerLiftM: Float = 0.002
 
-  /// The distance fade and the travelling highlight, matching GroundPath.tsx so
-  /// that switching renderer changes only *when* the band is drawn.
+  /// The distance fade and the travelling highlight.
   ///
   /// Deliberately well short of opaque, and that is a safety decision rather
   /// than a stylistic one. At 0.95 the band was a solid sheet of colour laid
@@ -245,14 +244,14 @@ enum GroundPath {
   /// and they outline rather than cover.
   static let nearOpacity: CGFloat = 0.32
   static let farOpacity: CGFloat = 0.22
-  /// How wide the travelling highlight is, as a fraction of the run. Matches
-  /// WAVE_WIDTH in GroundPath.tsx, and doubles as where the pulse sits inside
-  /// its own texture - the two have to agree for advanceWave to place it.
+  /// How wide the travelling highlight is, as a fraction of the run. Doubles
+  /// as where the pulse sits inside its own texture - the two have to agree
+  /// for advanceWave to place it.
   static let wavePulseHalfWidth: Float = 0.22
   static let waveCycleSeconds: CFTimeInterval = 1.9
   static let waveStrength: CGFloat = 0.35
 
-  /// Ground already covered, matching GroundPath.tsx.
+  /// Ground already covered.
   static let walkedNearOpacity: CGFloat = 0.5
   static let walkedFarOpacity: CGFloat = 0.32
 
@@ -262,26 +261,33 @@ enum GroundPath {
   static let rebuildFloorDeltaM: Float = 0.01
 
   /// How far along a run the walked/ahead split has to move before the band is
-  /// rebuilt on it, as a fraction of the run.
+  /// rebuilt on it.
   ///
   /// The split follows the walker continuously, so left unquantised it would
-  /// rebuild the geometry on every frame. A fortieth of a run is a few
-  /// centimetres on the eight-point stretch a tap places - well under what the
-  /// eye picks out as a step in the grey boundary.
-  static let rebuildSplitStep: Float = 0.025
-
-  /// How far in front of the lens the ribbon is cut off.
+  /// rebuild the geometry on every frame.
   ///
-  /// Nothing may be projected from at or behind the camera plane: the division
-  /// by depth blows up, and a point just behind the lens lands on screen as
-  /// confidently as one just in front. The chevrons dealt with this by dropping
-  /// any shape with a corner behind - a torn polygon being worse than a missing
-  /// one - but a ribbon cannot be dropped that way. It is one shape, it starts
-  /// under the walker's feet, and the part of it that is behind them is exactly
-  /// the part they are standing on. So it is *clipped* instead: the polyline is
-  /// cut at this depth and the ribbon is built from what survives, which is what
-  /// makes it run off the bottom of the frame rather than blink out.
-  static let nearClipM: Float = 0.25
+  /// In metres rather than as a fraction of the run, which is what it used to
+  /// be. A fraction meant the same setting behaved differently on the two
+  /// screens: a fortieth of the eight metres a tap places is twenty centimetres,
+  /// a fortieth of the sixteen metres of route the navigation screen carries is
+  /// twice that - so the boundary would have stepped most coarsely on the screen
+  /// where it matters, and the preview would have been quietly flattering.
+  ///
+  /// Twenty centimetres is well under a stride, and the boundary it moves lies
+  /// at the walker's own feet, where the ground is most foreshortened.
+  static let rebuildSplitM: Float = 0.2
+
+  /// How far a point has to move across the ground before the band is rebuilt
+  /// on it.
+  ///
+  /// This is the test the navigation screen needs and the preview never did. A
+  /// placement sits on plain ARKit anchors, which barely move once they are
+  /// down; a route sits on Geospatial anchors, which are corrected continuously
+  /// as the localisation improves. Without this the band would keep the shape it
+  /// was first built with while the anchors underneath it slid sideways. Five
+  /// centimetres is well under the width of the band, so a correction large
+  /// enough to see is a correction large enough to rebuild for.
+  static let rebuildMoveM: Float = 0.05
 }
 
 /// An ARKit camera preview whose frames are also fed to ARCore's Geospatial
@@ -300,12 +306,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   /// How far ahead the control anchors sit, in metres. Matches the distances
   /// the JS side labels them with.
   static let testDistancesM: [Double] = [3, 6, 10]
-
-  /// The index the route's ribbon is sent under. There is exactly one of it per
-  /// frame, so the value only has to be stable and not collide with an anchor
-  /// id - and anchor ids are lattice indices, which are never negative.
-  static let pathIndex = -100
-  static let walkedPathIndex = -101
 
   let onGeospatialUpdate = EventDispatcher()
   let onAnchorsUpdate = EventDispatcher()
@@ -386,31 +386,37 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private var previewTap: UITapGestureRecognizer?
 
 
-  /// The nodes currently in the scene, one per preview run, and whether the
-  /// last frame could have placed something.
+  /// The band nodes currently in the scene - the route's on the navigation
+  /// screen, the placements' in the preview.
   ///
-  /// Rebuilt rather than transformed, because a run's shape depends on the
-  /// ground under it as well as on its anchors, and both move as ARKit refines
-  /// them. Rebuilding a dozen vertices is far cheaper than the bookkeeping to
-  /// work out whether it was necessary.
-  private var previewNodes: [SCNNode] = []
-  private var lastPreviewGeometry: TimeInterval = 0
+  /// Rebuilt rather than transformed, because a band's shape depends on the
+  /// ground under it as well as on its anchors, and both move as ARKit and the
+  /// Geospatial API refine them. Rebuilding a dozen vertices is far cheaper than
+  /// the bookkeeping to work out whether it was necessary.
+  private var pathNodes: [SCNNode] = []
+  private var lastGeometryBuild: TimeInterval = 0
 
-  /// What the nodes currently in the scene were built from.
+  /// What the nodes currently in the scene were built from: the floor height
+  /// under each point, where each point stands on the ground plan, and where the
+  /// walked/ahead split falls on each run.
   ///
   /// The geometry is rebuilt only when one of these has actually moved, which
-  /// matters for more than cost: the travelling highlight is a `CABasicAnimation`
-  /// living on the fill material, and tearing the node down to rebuild it would
-  /// restart that animation from the beginning. Rebuilding on a timer made the
-  /// sweep stutter ten times a second.
-  private var builtRunCount = -1
+  /// matters for more than cost: a rebuild tears the nodes down, and anything
+  /// living on their materials goes with them.
+  ///
+  /// Each is compared against what was *built*, not against the last thing
+  /// measured. That is what stops a figure hovering on a threshold from
+  /// rebuilding every tick: once rebuilt, the stored figure is the current one,
+  /// so it takes a fresh move of the full amount to trigger again.
+  private var needsRebuild = true
   private var builtHeights: [Float] = []
+  private var builtPlan: [simd_float2] = []
   private var builtSplits: [Int] = []
 
   /// Built once and kept. Neither ramp ever changes, and both allocate a bitmap.
   /// The wave materials currently in the scene, so their phase can be advanced
   /// each frame. Emptied whenever the nodes are.
-  private var previewWaveMaterials: [SCNMaterial] = []
+  private var waveMaterials: [SCNMaterial] = []
 
   private var cachedFade: UIImage?
   private var cachedWalked: UIImage?
@@ -544,7 +550,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
     if !on {
       clearPreview()
-      clearPreviewNodes()
+      clearPathNodes()
     }
   }
 
@@ -553,16 +559,17 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   }
 
 
-  private func clearPreviewNodes() {
-    for node in previewNodes { node.removeFromParentNode() }
-    previewNodes.removeAll()
-    previewWaveMaterials.removeAll()
+  private func clearPathNodes() {
+    for node in pathNodes { node.removeFromParentNode() }
+    pathNodes.removeAll()
+    waveMaterials.removeAll()
     // The signature has to go with them. Left set, the next tick would compare
-    // an unchanged run count against nodes that are no longer in the scene and
+    // an unchanged shape against nodes that are no longer in the scene and
     // decline to rebuild the very thing it just removed.
-    builtRunCount = -1
+    needsRebuild = true
     builtSplits = []
     builtHeights = []
+    builtPlan = []
   }
 
   /// Cleared by a token rather than by a method call, because a view in this
@@ -1122,19 +1129,27 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       updatePreviewReadiness(arFrame: arFrame)
       // Placements get their floor found under each point, the same as route
       // anchors do, which is what lets a band laid down a ramp follow it.
-      probeAnchorGround(previewGroundPoints(), arFrame: arFrame)
-      updatePreviewGeometry(arFrame: arFrame)
+      let ground = previewGroundPoints()
+      probeAnchorGround(ground, arFrame: arFrame)
+      updatePathGeometry(
+        points: ground,
+        splits: previewRuns.map { run in
+          walkerDistance(along: run.anchors.map { origin(of: $0.transform) }, arFrame: arFrame)
+        },
+        arFrame: arFrame
+      ) {
+        previewStretches(arFrame: arFrame)
+      }
 
-      // Only the pin goes over to the JS layer. The band is drawn in the
-      // scene now, and there is no longer a second version of it to compare
-      // against - the comparison is settled.
+      // Only the pin goes over to the JS layer. The band is geometry in the
+      // scene, so there is nothing of it left to draw over the top.
       //
       // The pin stays where it is, and that is not the same thing as being
       // left behind. A destination marker has to face the walker from every
       // approach, which is what a flat sprite at a projected point is; the
       // band lies on the ground and belongs in the geometry. Each is drawn
       // where its own shape wants to be.
-      emitPreviewAnchors(arFrame: arFrame, viewport: viewport, pinsOnly: true)
+      emitPreviewAnchors(arFrame: arFrame, viewport: viewport)
       return
     }
 
@@ -1172,13 +1187,14 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       )
     }
 
-    // A few of the band's points are re-probed each tick rather than all of
-    // them, which is what keeps following the ground affordable.
-    probeAnchorGround(routeGroundPoints(), arFrame: arFrame)
+    // Found once and used twice: the ground probe measures the floor under
+    // these points, and the rebuild test asks whether they have moved.
+    let ground = routeGroundPoints()
+    probeAnchorGround(ground, arFrame: arFrame)
 
     // Everything that is a point rather than a path: the destination pin. Sent
-    // with its own kind and no outline, since the JS side draws it as a sprite
-    // standing at the projected point rather than as a shape on the ground.
+    // with its own kind, since the JS side draws it as a sprite standing at the
+    // projected point rather than as a shape on the ground.
     for request in requestedAnchors where request.kind != "route" {
       guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { continue }
       projected.append(
@@ -1194,36 +1210,38 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       )
     }
 
-    // Two bands rather than one, cut where the walker is standing: what is
-    // behind them is drawn as covered ground and what is ahead as the route.
-    //
-    // The covered half is mostly invisible while walking forwards, which is not
-    // a reason to leave it out - it is what makes turning round intelligible.
-    // Glancing back at a junction otherwise shows a band running away in the
-    // direction you came from, indistinguishable from one telling you to go
-    // that way.
-    let (walked, ahead) = splitAtWalker(route, arFrame: arFrame)
-
-    if let covered = ribbon(
-      along: walked,
-      index: Self.walkedPathIndex,
-      kind: "path-walked",
-      arFrame: arFrame,
-      viewport: viewport
+    // The band itself is geometry inside the AR scene rather than a polygon
+    // drawn over the top of it, which is the whole of what the preview screen
+    // was built to settle. An overlay is computed from one camera frame and
+    // composited a frame or two later, over a camera image that has moved on, so
+    // it is always drawn for a pose the phone has already left - it holds still
+    // when the phone does and slides when it moves. Geometry is rasterised in
+    // the same pass as the image it lies on, from the same pose, so it cannot be
+    // late. It is also what lets the room mesh hide it.
+    updatePathGeometry(
+      points: ground,
+      splits: [walkerDistance(along: route.map { $0.position }, arFrame: arFrame)],
+      arFrame: arFrame
     ) {
-      projected.append(covered)
+      // Two bands rather than one, cut where the walker is standing: what is
+      // behind them is drawn as covered ground and what is ahead as the route.
+      //
+      // The covered half is mostly invisible while walking forwards, which is
+      // not a reason to leave it out - it is what makes turning round
+      // intelligible. Glancing back at a junction otherwise shows a band running
+      // away in the direction you came from, indistinguishable from one telling
+      // you to go that way.
+      let (walked, ahead) = splitAtWalker(route, arFrame: arFrame)
+      return [
+        BandStretch(points: walked, walked: true),
+        BandStretch(points: ahead, walked: false),
+      ]
     }
 
-    if let path = ribbon(
-      along: ahead,
-      index: Self.pathIndex,
-      kind: "path",
-      arFrame: arFrame,
-      viewport: viewport
-    ) {
-      projected.append(path)
-    }
-
+    // What is left for the JS layer: the destination pin and, on the test
+    // screen, the control anchors. Both are points rather than shapes lying on
+    // the ground, which is exactly the distinction that decides which side of
+    // the bridge a thing is drawn on.
     onAnchorsUpdate(["anchors": projected])
   }
 
@@ -1291,86 +1309,133 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     }
   }
 
-  /// The preview runs, built as geometry inside the AR scene.
+
+  /// One stretch of band: the points it runs through, and whether it is ground
+  /// the walker has already covered.
+  private struct BandStretch {
+    let points: [PathPoint]
+    let walked: Bool
+  }
+
+  /// The guidance, built as geometry inside the AR scene.
   ///
-  /// This is the answer to why the overlay never feels stuck to the ground. The
-  /// overlay computes screen positions from camera frame N, hands them across
-  /// the bridge, waits for React to re-render and for the SVG views to update -
-  /// and by then the preview underneath is showing frame N+2 or later. The band
-  /// is therefore always drawn for a pose the camera has already left, which is
-  /// why it holds still when the phone does and slides when it moves.
+  /// This is the answer to why the overlay never felt stuck to the ground. It
+  /// computed screen positions from camera frame N, handed them across the
+  /// bridge, waited for React to re-render and for the SVG views to update - and
+  /// by then the camera image underneath was showing frame N+2 or later. The
+  /// band was therefore always drawn for a pose the phone had already left,
+  /// which is why it held still when the phone did and slid when it moved.
   ///
   /// Geometry in the scene has no such gap. SceneKit rasterises it in the same
-  /// pass as the camera image it lies on, from the same pose, so it is late by
+  /// pass as the camera image it sits on, from the same pose, so it is late by
   /// definition never. It is also real 3D, which is what makes depth occlusion
-  /// and a contact shadow possible at all - neither is available to a polygon
-  /// painted over the top of everything.
-  private func updatePreviewGeometry(arFrame: ARFrame) {
+  /// possible at all - a polygon painted over the top of everything cannot be
+  /// hidden by a wall, because it was never behind one.
+  ///
+  /// The route and the placements share this, and share it whole. What differs
+  /// between the two screens is only where the points come from: a route threads
+  /// one chain of Geospatial anchors from the walker to their destination, a
+  /// preview holds a handful of separate runs on plain ARKit ones. Everything
+  /// from there down - the floor found under each point, the cut at the walker,
+  /// the three strips, the triangles, the sweep - is this code. That is what
+  /// makes the preview worth testing on: it is not a mock-up of the navigation
+  /// screen's band, it is that band, on a carpet.
+  ///
+  /// - Parameters:
+  ///   - points: every anchored point the shape is derived from, used to decide
+  ///     whether anything has actually moved.
+  ///   - splits: how far along each run the walker stands, for the same test.
+  ///   - build: the stretches to lay down. Called only when a rebuild is due, so
+  ///     the work of cutting and threading them is not done to be thrown away on
+  ///     the ticks where nothing has changed.
+  private func updatePathGeometry(
+    points: [(id: Int, position: simd_float3)],
+    splits: [Float],
+    arFrame: ARFrame,
+    build: () -> [BandStretch]
+  ) {
     // The sweep advances every frame, regardless of whether the geometry is
-    // rebuilt. It is a phase off the clock rather than an animation attached to
-    // a material, so it survives the rebuilds below - see the note where the
-    // wave material is made.
+    // rebuilt. It is a phase off the clock rather than an animation attached to a
+    // material, so it survives the rebuilds below - see the note where the wave
+    // material is made.
     advanceWave(arFrame: arFrame)
 
     // Rebuilt only when something about it has moved - not on a clock. The
     // *rendering* stays frame-locked regardless, which is the entire point of
-    // this renderer; what a rebuild changes is the shape.
+    // drawing it this way; what a rebuild changes is the shape.
     let now = arFrame.timestamp
-    guard now - lastPreviewGeometry > GroundPath.groundProbeInterval else { return }
-    lastPreviewGeometry = now
+    guard now - lastGeometryBuild > GroundPath.groundProbeInterval else { return }
+    lastGeometryBuild = now
 
-    // Where the walker stands on each run, which is where its band is cut into
-    // covered ground and ground ahead. Quantised before it is compared: taken
-    // raw it changes on every fix, and every change is a rebuild.
-    let splits = previewRuns.map { run -> Int in
-      Int((walkerFraction(along: run, arFrame: arFrame) / GroundPath.rebuildSplitStep).rounded())
+    // Quantised before it is compared: taken raw the split moves with every step
+    // the walker takes, and every move would be a rebuild.
+    let quantisedSplits = splits.map {
+      Int(($0 / GroundPath.rebuildSplitM).rounded())
     }
 
-    // Compared against the heights the band is actually built from, not
-    // against the floor under the walker.
+    // Compared against the heights the band is actually built from, not against
+    // the floor under the walker.
     //
     // Those are different numbers on a slope, which is the whole point: the
-    // walker's floor changes with every step downhill, so keying the rebuild
-    // to it meant rebuilding constantly while descending even though the band
-    // ahead had not moved at all.
-    let heights = previewGroundPoints().map { anchorGroundY[$0.id] ?? groundY ?? 0 }
-    let shapeMoved = heights.count != builtHeights.count
-      || zip(heights, builtHeights).contains {
-        abs($0 - $1) > GroundPath.rebuildFloorDeltaM
-      }
+    // walker's floor changes with every step downhill, so keying the rebuild to
+    // it meant rebuilding constantly while descending even though the band ahead
+    // had not moved at all.
+    let heights = points.map { anchorGroundY[$0.id] ?? groundY ?? 0 }
+    let plan = points.map { simd_float2($0.position.x, $0.position.z) }
 
-    guard previewRuns.count != builtRunCount || splits != builtSplits || shapeMoved else {
-      return
-    }
+    let moved = needsRebuild
+      || quantisedSplits != builtSplits
+      || heights.count != builtHeights.count
+      || zip(heights, builtHeights).contains { abs($0 - $1) > GroundPath.rebuildFloorDeltaM }
+      || plan.count != builtPlan.count
+      || zip(plan, builtPlan).contains { simd_distance($0, $1) > GroundPath.rebuildMoveM }
 
-    builtRunCount = previewRuns.count
-    builtSplits = splits
+    guard moved else { return }
+
+    let stretches = build()
+
+    // In this order. Clearing resets the signature, so recording what has just
+    // been built has to come after it or it would be wiped by its own bookkeeping
+    // and rebuilt again on the next tick, forever.
+    clearPathNodes()
+    builtSplits = quantisedSplits
     builtHeights = heights
+    builtPlan = plan
+    needsRebuild = false
 
-    clearPreviewNodes()
+    for stretch in stretches {
+      guard let node = bandNode(along: stretch.points, walked: stretch.walked) else { continue }
+      sceneView.scene.rootNode.addChildNode(node)
+      pathNodes.append(node)
+    }
+  }
 
-    for run in previewRuns {
-      // The pin stays on the overlay under both renderers, and that is not an
-      // omission. A destination marker is a billboard by design - it has to
-      // face the viewer from every approach, which is what a flat sprite at a
-      // projected point *is* - so modelling it in 3D would buy nothing and cost
-      // it the one property it must have. What is being compared here is the
-      // band, which is the thing that genuinely lies on the ground.
-      guard run.kind != "destination" else { continue }
+  /// The placements as stretches of band.
+  ///
+  /// One run is one band and never two runs joined. A route is a single chain
+  /// from where the walker stands to where they are going, so every point on it
+  /// belongs to the same band; a preview is a scatter of separate things, and two
+  /// stretches dropped in different corners of a room are two paths. Flattening
+  /// them into one list would draw a band across the gap between them.
+  ///
+  /// Each is cut at the walker exactly as a real route is. A placement has no
+  /// direction of travel of its own, but walking along one is the nearest thing
+  /// to walking a route that can be done indoors - and it is the only way to see
+  /// the covered half behave without going outside and planning a journey.
+  private func previewStretches(arFrame: ARFrame) -> [BandStretch] {
+    previewRuns.flatMap { run -> [BandStretch] in
+      // A pin is not a band. It is drawn as a sprite at a projected point,
+      // because a destination marker has to face the walker from every approach -
+      // modelling it in 3D would buy nothing and cost it the one property it must
+      // have.
+      guard run.kind != "destination" else { return [] }
 
       let points = previewPoints(of: run, arFrame: arFrame)
-      // Cut where the walker is standing, exactly as a real route is. A
-      // placement has no direction of travel of its own, but walking along one
-      // is the nearest thing to walking a route that can be done indoors - and
-      // it is the only way to see the covered half behave without going outside
-      // and planning a journey.
       let (walked, ahead) = splitAtWalker(points, arFrame: arFrame)
-
-      for (stretch, isWalked) in [(walked, true), (ahead, false)] {
-        guard let node = bandNode(along: stretch, walked: isWalked) else { continue }
-        sceneView.scene.rootNode.addChildNode(node)
-        previewNodes.append(node)
-      }
+      return [
+        BandStretch(points: walked, walked: true),
+        BandStretch(points: ahead, walked: false),
+      ]
     }
   }
 
@@ -1388,20 +1453,25 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     }
   }
 
-  /// How far along a run the walker stands, as a 0-1 fraction. Only used to
-  /// decide whether the split has moved enough to be worth a rebuild.
-  private func walkerFraction(along run: PreviewRun, arFrame: ARFrame) -> Float {
-    guard run.anchors.count >= 2 else { return 0 }
+  /// How far along a run the walker stands, in metres from its near end. Only
+  /// used to decide whether the split has moved enough to be worth a rebuild.
+  ///
+  /// Measured along the straight line between the run's ends rather than around
+  /// its corners, which is an approximation and a safe one: it is not answering
+  /// where to cut the band - `splitAtWalker` does that, properly - only whether
+  /// the answer has changed since last time.
+  private func walkerDistance(along positions: [simd_float3], arFrame: ARFrame) -> Float {
+    guard positions.count >= 2 else { return 0 }
     let camera = origin(of: arFrame.camera.transform)
-    let first = origin(of: run.anchors[0].transform)
-    let last = origin(of: run.anchors[run.anchors.count - 1].transform)
+    let first = positions[0]
+    let last = positions[positions.count - 1]
 
     let axis = simd_float3(last.x - first.x, 0, last.z - first.z)
-    let lengthSquared = simd_length_squared(axis)
-    guard lengthSquared > 1e-6 else { return 0 }
+    let length = simd_length(axis)
+    guard length > 1e-3 else { return 0 }
 
     let toCamera = simd_float3(camera.x - first.x, 0, camera.z - first.z)
-    return min(1, max(0, simd_dot(toCamera, axis) / lengthSquared))
+    return min(length, max(0, simd_dot(toCamera, axis) / length))
   }
 
   /// Slides the highlight texture along the band, one pass per cycle.
@@ -1410,7 +1480,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   /// decreasing t walks the bright band towards larger v - which is away from
   /// the walker.
   private func advanceWave(arFrame: ARFrame) {
-    guard !previewWaveMaterials.isEmpty else { return }
+    guard !waveMaterials.isEmpty else { return }
 
     let phase = Float(
       arFrame.timestamp.truncatingRemainder(dividingBy: GroundPath.waveCycleSeconds)
@@ -1428,7 +1498,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // whatever puts that peak at `centre`: sampling at v + t shows the peak
     // where v = peak - t.
     let transform = SCNMatrix4MakeTranslation(0, half - centre, 0)
-    for material in previewWaveMaterials {
+    for material in waveMaterials {
       material.diffuse.contentsTransform = transform
     }
   }
@@ -1538,7 +1608,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       // A phase computed from absolute time has no such memory. It picks up
       // exactly where it left off however often the geometry underneath it is
       // replaced, which is what lets the split move freely.
-      previewWaveMaterials.append(waveMaterial)
+      waveMaterials.append(waveMaterial)
 
       wave.geometry?.materials = [waveMaterial]
       wave.renderingOrder = -11
@@ -1945,184 +2015,33 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     onPreviewState(["ready": previewReady, "placed": placed])
   }
 
-  /// The tapped placements, projected exactly the way a real route is.
+  /// The pins among the placements, projected exactly the way a real route's
+  /// destination is - same kind, same projection, so the JS side needs no idea
+  /// which screen it is drawing for.
   ///
-  /// Same `kind` values, same ribbon builder, same projection - so what the
-  /// preview shows is the navigation screen's own drawing rather than a mock-up
-  /// of it, and the JS side needs no idea which one it is looking at.
-  ///
-  /// Each tap is its own run and therefore its own ribbon, which is why the
-  /// placements are grouped rather than being one flat list. Two paths dropped
-  /// in different corners of a room are two paths; stitching them into one
-  /// would draw a ribbon across the gap between them.
-  private func emitPreviewAnchors(arFrame: ARFrame, viewport: CGSize, pinsOnly: Bool) {
+  /// Only the pins. The bands are geometry in the scene; see
+  /// `updatePathGeometry`.
+  private func emitPreviewAnchors(arFrame: ARFrame, viewport: CGSize) {
     var projected: [[String: Any]] = []
 
-    for (index, run) in previewRuns.enumerated() {
-      let points = previewPoints(of: run, arFrame: arFrame)
-
-      if run.kind == "destination" {
-        guard let first = points.first else { continue }
-        projected.append(
-          project(
-            position: first.position,
-            // The pin's index is negative, matching the destination id the
-            // navigation screen uses, so the JS side treats it the same way.
-            index: -1 - index,
-            kind: run.kind,
-            arFrame: arFrame,
-            viewport: viewport
-          )
+    for (index, run) in previewRuns.enumerated() where run.kind == "destination" {
+      guard let first = previewPoints(of: run, arFrame: arFrame).first else { continue }
+      projected.append(
+        project(
+          position: first.position,
+          // The pin's index is negative, matching the destination id the
+          // navigation screen uses, so the JS side treats it the same way.
+          index: -1 - index,
+          kind: run.kind,
+          arFrame: arFrame,
+          viewport: viewport
         )
-        continue
-      }
-
-      if pinsOnly { continue }
-
-      // Cut at the walker exactly as a real route is, so the covered half can be
-      // seen indoors by walking along a placement. Two ribbons need two indices
-      // that cannot collide with each other or with another run: doubling the
-      // run index gives each run a pair of its own.
-      let (walked, ahead) = splitAtWalker(points, arFrame: arFrame)
-
-      if let covered = ribbon(
-        along: walked,
-        index: index * 2 + 1,
-        kind: "path-walked",
-        arFrame: arFrame,
-        viewport: viewport
-      ) {
-        projected.append(covered)
-      }
-
-      if let path = ribbon(
-        along: ahead,
-        index: index * 2,
-        kind: "path",
-        arFrame: arFrame,
-        viewport: viewport
-      ) {
-        projected.append(path)
-      }
+      )
     }
 
     onAnchorsUpdate(["anchors": projected])
   }
 
-  /// The route as one closed polygon on screen: a band of constant width in the
-  /// world, laid along the centreline and cut off at the near plane.
-  ///
-  /// Nil when there is nothing left to draw - fewer than two points to begin
-  /// with, or the whole path behind the walker.
-  private func ribbon(
-    along centres: [PathPoint],
-    index: Int,
-    kind: String,
-    arFrame: ARFrame,
-    viewport: CGSize
-  ) -> [String: Any]? {
-    let visible = clipToNearPlane(centres, arFrame: arFrame)
-    guard visible.count >= 2 else { return nil }
-
-    let half = GroundPath.widthM / 2
-    var leftEdge: [CGPoint] = []
-    var rightEdge: [CGPoint] = []
-    var markers: [Double] = []
-    var nearest = Float.greatestFiniteMagnitude
-    var nearestPoint = CGPoint.zero
-    // Mitred at the corners, the same as the scene renderer - see bandFrames.
-    let frames = bandFrames(visible, halfWidth: half)
-
-    for (i, point) in visible.enumerated() {
-      let centre = point.position
-      guard let frame = frames[i] else { continue }
-      let along = frame.along
-      let side = frame.side
-
-      let left = screenPoint(
-        of: centre - frame.offset, arFrame: arFrame, viewport: viewport
-      )
-      let right = screenPoint(
-        of: centre + frame.offset, arFrame: arFrame, viewport: viewport
-      )
-      guard left.inFront, right.inFront else { continue }
-
-      leftEdge.append(left.point)
-      rightEdge.append(right.point)
-
-      if point.marker,
-         let triangle = marker(at: centre, along: along, side: side, arFrame: arFrame, viewport: viewport) {
-        markers.append(contentsOf: triangle)
-      }
-
-      if left.distance < nearest {
-        nearest = left.distance
-        nearestPoint = left.point
-      }
-    }
-
-    guard leftEdge.count >= 2 else { return nil }
-
-    // Down one edge and back up the other, which closes the band into a single
-    // polygon rather than two lines that happen to be near each other.
-    var outline: [Double] = []
-    for point in leftEdge + rightEdge.reversed() {
-      outline.append(Double(point.x))
-      outline.append(Double(point.y))
-    }
-
-    var payload: [String: Any] = [
-      "index": index,
-      "kind": kind,
-      "x": nearestPoint.x,
-      "y": nearestPoint.y,
-      "distance": Double(nearest),
-      "visible": true,
-      "outline": outline,
-    ]
-    if !markers.isEmpty { payload["markers"] = markers }
-    return payload
-  }
-
-  /// One direction triangle lying in the band, as three screen corners.
-  ///
-  /// Deliberately *not* distance-compensated, unlike the chevrons these grew
-  /// out of. That compensation is what put a pinch in the old run, and it is
-  /// not needed here because these are no longer carrying the guidance on their
-  /// own - the band does that, continuously, and these only say which way along
-  /// it to go. A far one shrinking to almost nothing costs nothing, because the
-  /// band it sits on is still there.
-  ///
-  /// Nil when any corner is behind the lens. A partly projected triangle is not
-  /// a smaller triangle, it is a torn one - and there is no clipping to do here
-  /// the way there is for the band, because a missing marker leaves the band
-  /// intact and a missing stretch of band would leave a hole.
-  private func marker(
-    at centre: simd_float3,
-    along: simd_float3,
-    side: simd_float3,
-    arFrame: ARFrame,
-    viewport: CGSize
-  ) -> [Double]? {
-    let halfLength = GroundPath.markerLengthM / 2
-    let halfWidth = GroundPath.markerWidthM / 2
-
-    let corners = [
-      centre + along * halfLength,
-      centre - along * halfLength + side * halfWidth,
-      centre - along * halfLength - side * halfWidth,
-    ]
-
-    var flat: [Double] = []
-    for corner in corners {
-      let projected = screenPoint(of: corner, arFrame: arFrame, viewport: viewport)
-      guard projected.inFront else { return nil }
-      flat.append(Double(projected.point.x))
-      flat.append(Double(projected.point.y))
-    }
-
-    return flat
-  }
 
   /// The centreline cut in two where the walker is standing: what they have
   /// already covered, and what is still ahead.
@@ -2177,52 +2096,10 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     return (walked, ahead)
   }
 
-  /// The centreline with everything at or behind the lens removed, and the
-  /// segment that straddles the near plane cut at it.
-  ///
-  /// Cutting rather than dropping is the whole point - see GroundPath.nearClipM.
-  /// The walker is standing on the near end of this path, so on any route being
-  /// actively walked the first point or two are behind the camera, and dropping
-  /// whole segments would make the ribbon start a stride and a half up the
-  /// street instead of at their feet.
-  private func clipToNearPlane(_ centres: [PathPoint], arFrame: ARFrame) -> [PathPoint] {
-    guard centres.count >= 2 else { return [] }
-
-    let toCamera = arFrame.camera.transform.inverse
-    // Depth in front of the lens, positive ahead: camera space looks down -Z.
-    func depth(_ position: simd_float3) -> Float {
-      -simd_mul(toCamera, simd_float4(position, 1)).z
-    }
-
-    let near = GroundPath.nearClipM
-    var kept: [PathPoint] = []
-
-    for i in 0..<(centres.count - 1) {
-      let a = centres[i]
-      let b = centres[i + 1]
-      let da = depth(a.position)
-      let db = depth(b.position)
-
-      if da >= near { kept.append(a) }
-
-      // Exactly one end in front: the crossing point is where the depth
-      // reaches the near plane, which on a straight segment is a plain linear
-      // interpolation of the two depths. The cut point carries no marker - it
-      // is an artefact of where the phone is pointed, not a place on the route.
-      if (da >= near) != (db >= near), abs(db - da) > 1e-6 {
-        let t = (near - da) / (db - da)
-        kept.append(PathPoint(position: a.position + (b.position - a.position) * t, marker: false))
-      }
-    }
-
-    if depth(centres[centres.count - 1].position) >= near { kept.append(centres[centres.count - 1]) }
-
-    return kept
-  }
 
   /// One anchor as a bare projected point: the destination pin, and the control
-  /// anchors on the test screen. Anything drawn as a shape on the ground goes
-  /// through `ribbon` instead.
+  /// anchors on the test screen. Anything that lies on the ground rather than
+  /// facing the walker is geometry in the scene instead.
   private func project(
     position: simd_float3,
     index: Int,

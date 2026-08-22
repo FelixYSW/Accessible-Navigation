@@ -6,12 +6,12 @@ import Svg, { Defs, LinearGradient, Polygon, Stop } from 'react-native-svg';
 // painted along the way ahead, leading away from the walker and curving into
 // the turn as one comes up.
 //
-// It draws the same shape as GroundPath and differs entirely in where the shape
-// comes from. There the band is projected natively from points anchored to real
-// coordinates, so it sits on one patch of ground and stays on it. Here it is
-// computed from a compass bearing, a guessed camera height and a measured tilt,
-// which puts it in roughly the right direction and lets it swim as the
-// magnetometer wanders.
+// It draws the same shape as the anchored band and differs entirely in where
+// the shape comes from. That one is geometry inside the AR scene, built on
+// points anchored to real coordinates, so it sits on one patch of ground and
+// stays on it. This one is computed from a compass bearing, a guessed camera
+// height and a measured tilt, which puts it in roughly the right direction and
+// lets it swim as the magnetometer wanders.
 //
 // Drawing the same shape in both is the point. The two treatments swap over
 // mid-walk as localisation comes and goes, and a change of *form* at that moment
@@ -44,14 +44,15 @@ export const DEFAULT_CAMERA_PITCH_DEG = 30;
 
 // How far ahead the band is drawn, in metres. Kept short: the ground compresses
 // hard towards the horizon, and past six metres a band lying on it has narrowed
-// to a few points of screen - correct, and useless. This matches the horizon the
-// anchored band is cut at, so neither treatment reaches further than the other.
+// to a few points of screen - correct, and useless. A little shorter than the
+// anchored band's eight metres, and deliberately: this one is aimed by a
+// compass, and the further it reaches the wider a bearing error spreads it.
 const PATH_LENGTH_M = 6.0;
 
 // How wide the band is, in metres. The same width the anchored band uses (see
-// GroundPath.widthM on the native side), because the two swap over mid-walk and
-// a change of width at that moment would read as the guidance changing rather
-// than as the same guidance from a different source.
+// GroundPath.widthM in the Swift view), because the two swap over mid-walk and a
+// change of width at that moment would read as the guidance changing rather than
+// as the same guidance from a different source.
 const PATH_WIDTH_M = 0.9;
 
 // How far the path takes to swing into a turn, centred on the turn point. A
@@ -83,10 +84,16 @@ const MIN_DEPTH_M = 0.45;
 const HALO_WIDTH = 8;
 const RIM_WIDTH = 2;
 
-// The near end is solid and the far end faint, which is what gives the band its
-// sense of receding. Matches GroundPath.
-const NEAR_OPACITY = 0.95;
-const FAR_OPACITY = 0.55;
+// The near end is stronger and the far end fainter, which is what gives the band
+// its sense of receding. The same pair the anchored band uses.
+//
+// Well short of opaque, for the reason the anchored one is: a solid sheet of
+// colour laid over the pavement hides exactly what a walker most needs to see -
+// the kerb, the puddle, the broken slab. That argument is stronger here, not
+// weaker. This band is aimed by a magnetometer, so it is the one more likely to
+// be lying over ground the route does not actually cross.
+const NEAR_OPACITY = 0.32;
+const FAR_OPACITY = 0.22;
 
 interface GroundArrowsProps {
   /** Which way the route goes from where the walker is standing, relative to

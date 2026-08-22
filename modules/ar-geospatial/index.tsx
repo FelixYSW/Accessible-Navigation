@@ -39,38 +39,30 @@ export interface GeoAnchor {
   longitude: number;
 }
 
-/** One thing the AR session drew this frame, projected to where it appears on
- *  screen. Mostly anchors; `path` is the exception. */
+/** One anchor the AR session drew this frame, projected to where it appears on
+ *  screen.
+ *
+ *  Points only, and deliberately. The guidance band does not come across this
+ *  bridge at all: it is geometry inside the AR scene, rasterised in the same
+ *  pass as the camera image, which is what lets it hold still and lets a wall
+ *  hide it. What is sent here is what is genuinely a sprite - something that
+ *  faces the viewer from wherever they happen to stand, and so has nothing to
+ *  gain from being modelled in three dimensions. */
 export interface ProjectedAnchor {
-  /** The `id` it was requested under, for route points. Paths carry an id of
-   *  their own instead - there is one per run, not one per anchor. */
+  /** The `id` it was requested under. */
   index: number;
-  /** `path` is the ground ribbon ahead of the walker and `path-walked` the
-   *  stretch behind them, cut apart where they are standing. The two are drawn
-   *  in different colours and are otherwise identical. They are the only kinds
-   *  that carry an `outline`.
-   *
-   *  `local` anchors are plain ARKit ones, planted ahead of wherever the phone
+  /** `local` anchors are plain ARKit ones, planted ahead of wherever the phone
    *  was when tracking started. They need no VPS, GPS or coverage of any kind,
    *  so they work indoors - they are the control for judging whether the
    *  tracking itself holds still. `destination` is pinned to a real coordinate
    *  and only appears once Earth is localised. */
-  kind: 'local' | 'path' | 'path-walked' | 'destination';
+  kind: 'local' | 'destination';
   x: number;
   y: number;
-  /** Metres from the camera. For a path, to its nearest point. */
+  /** Metres from the camera. */
   distance: number;
   /** False when it is behind the camera. */
   visible: boolean;
-  /** The screen corners of the ground ribbon, flattened to
-   *  `[x0, y0, x1, y1, ...]`: one edge from near to far, then the other from
-   *  far back to near, so the two close into a single polygon. Present only on
-   *  the path kinds. */
-  outline?: number[];
-  /** The direction triangles lying in the band, flattened to
-   *  `[x0, y0, x1, y1, x2, y2, ...]` - six numbers per triangle, first corner
-   *  the tip. Absent when none of them is fully in front of the lens. */
-  markers?: number[];
 }
 
 /** One detection, straight off the model. Deliberately not `HazardDetection`

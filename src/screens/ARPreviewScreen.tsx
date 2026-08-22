@@ -18,7 +18,6 @@ import {
 } from '../components/maneuverIcons';
 import { ARScanOverlay } from '../components/ARScanOverlay';
 import { CameraStage } from '../components/CameraStage';
-import { GroundPath } from '../components/GroundPath';
 import { DestinationPin } from '../components/DestinationPin';
 import { useSettings } from '../theme/SettingsContext';
 import { OVERLAY_PILL_HEIGHT, OVERLAY_RED, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
@@ -118,7 +117,6 @@ export function ARPreviewScreen({ navigation }: Props) {
 
   return (
     <CameraStage isActive surface={surface}>
-      <GroundPath anchors={anchors} color={T.green} />
       <DestinationPin anchors={anchors} label="Destination" />
 
       {/* Over the guidance and under the controls: it is telling the user the

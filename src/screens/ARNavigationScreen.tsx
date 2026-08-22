@@ -30,7 +30,6 @@ import { useSpokenHazardCues, useSpokenTurnCues } from '../services/voiceCues';
 import { AppIcon } from '../components/AppIcon';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
-import { GroundPath } from '../components/GroundPath';
 import { DestinationPin } from '../components/DestinationPin';
 import {
   MANEUVER_ICONS,
@@ -604,28 +603,30 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   return (
     <CameraStage isActive surface={surface}>
-      {/* Under the hazard overlay: a hazard on the path is the more urgent of
-          the two, and must never end up behind the band leading to it.
+      {/* The anchored band is not on this layer any more, and that is the
+          whole change: it is geometry inside the AR scene, drawn by
+          ARGeospatialView above, in the same pass as the camera image it lies
+          on. An overlay could only ever be drawn for a pose the phone had
+          already left, which is what made it slide; and being painted over the
+          top of everything, nothing in the street could hide it. What stays
+          here is the pin, which is a sprite by design - a destination marker
+          has to face the walker from every approach.
 
-          One of the two, never both - they draw the same band from
-          different sources, and showing them together would read as a double
-          image wherever the two disagreed, which is precisely where it would
-          matter most.
+          Still one band or the other and never both. The compass run below
+          draws the same route from a different source, and the two together
+          would read as a double image wherever they disagreed - which is
+          precisely where it would matter most. `anchorsTrusted` is what keeps
+          them apart.
 
           No `guiding` check here, unlike the compass run below: both halves of
           `promptVisible` require `!anchorsTrusted`, so the prompt cannot be up
-          at the same moment these are drawn. Adding the condition would read as
+          at the same moment this is drawn. Adding the condition would read as
           a case that can happen. */}
       {anchorsTrusted && (
-        <>
-          <GroundPath anchors={projectedAnchors} color={T.green} />
-          {/* Over the band: the path leads to the pin, so the pin should
-              never be behind it. */}
-          <DestinationPin
-            anchors={projectedAnchors}
-            label={walkingRoute.destinationName}
-          />
-        </>
+        <DestinationPin
+          anchors={projectedAnchors}
+          label={walkingRoute.destinationName}
+        />
       )}
 
       {/* The compass-drawn run, for when the anchored one is not coming: no
