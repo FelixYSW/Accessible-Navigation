@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 import { SymbolView, type SymbolWeight } from 'expo-symbols';
 import type { SFSymbol } from 'sf-symbols-typescript';
 import {
@@ -47,15 +48,26 @@ const ICONS = {
   'chevron-down': { sf: 'chevron.down', lucide: ChevronDown },
   'chevron-up': { sf: 'chevron.up', lucide: ChevronUp },
   compass: { sf: 'location.circle', lucide: Compass },
-  // A traffic cone, which is what the lucide barrier is drawing and a better
-  // picture of a blocked pavement than any warning triangle.
-  construction: { sf: 'cone', lucide: Construction },
+  // A barrier across a pedestrian's path - the closest thing in the catalogue
+  // to what this class actually means.
+  //
+  // A traffic cone was the literal translation of the lucide barrier and the
+  // wrong idea: the class is trained on COCO - people, bicycles, parked cars,
+  // benches, bins, dogs - so a cone depicts one uncommon member of it and
+  // implies roadworks for all the rest.
+  //
+  // The one thing to watch is size. This is the most detailed of the four
+  // hazard glyphs and it is drawn at 13px on a detection box, where a gate and
+  // a figure have to resolve into something recognisable. It is the right
+  // meaning; if it does not hold together that small, `nosign` is the legible
+  // fallback that says less.
+  construction: { sf: 'pedestrian.gate.closed', lucide: Construction },
   'corner-left-down': { sf: 'arrow.turn.left.down', lucide: CornerLeftDown },
   'corner-right-down': { sf: 'arrow.turn.right.down', lucide: CornerRightDown },
   'corner-up-left': { sf: 'arrow.turn.up.left', lucide: CornerUpLeft },
   'corner-up-right': { sf: 'arrow.turn.up.right', lucide: CornerUpRight },
   crosshair: { sf: 'scope', lucide: Crosshair },
-  droplets: { sf: 'drop', lucide: Droplets },
+  droplets: { sf: 'humidity', lucide: Droplets },
   'map-pin': { sf: 'mappin', lucide: MapPin },
   rabbit: { sf: 'hare', lucide: Rabbit },
   radar: { sf: 'dot.radiowaves.forward', lucide: Radar },
@@ -67,7 +79,21 @@ const ICONS = {
   'volume-off': { sf: 'speaker.slash', lucide: VolumeX },
   'volume-on': { sf: 'speaker.wave.2', lucide: Volume2 },
   waves: { sf: 'water.waves', lucide: WavesHorizontal },
-} satisfies Record<string, { sf: SFSymbol; lucide: LucideIcon }>;
+
+  // Two symbols stacked, because Apple ships neither of these as a compound.
+  //
+  // The `.viewfinder` family is one of the smallest in the catalogue - 26
+  // entries against 1,801 for `.circle` - and it contains no buildings and no
+  // path. Apple's own compounds are drawn to fit their frame; these are only
+  // centred and scaled into it, so they are used at the one size that suits
+  // them, on a card, and not at 15px in a pill.
+  'scan-buildings': { sf: 'viewfinder', inner: 'building.2.fill', lucide: Radar },
+  'scan-path': {
+    sf: 'viewfinder',
+    inner: 'point.bottomleft.forward.to.point.topright.scurvepath.fill',
+    lucide: ScanEye,
+  },
+} satisfies Record<string, { sf: SFSymbol; inner?: SFSymbol; lucide: LucideIcon }>;
 
 export type AppIconName = keyof typeof ICONS;
 
@@ -79,6 +105,11 @@ const DEFAULT_WEIGHT: SymbolWeight = 'medium';
 // as a property of the glyph rather than as a stroke width.
 const LUCIDE_STROKE = 2;
 
+// How much of the frame the inner symbol fills, for the layered icons.
+// The viewfinder's clear area is a little under half its width, and an inner
+// glyph any larger starts touching the corner brackets.
+const INNER_FRACTION = 0.42;
+
 interface AppIconProps {
   name: AppIconName;
   size: number;
@@ -87,15 +118,36 @@ interface AppIconProps {
 }
 
 export function AppIcon({ name, size, color, weight = DEFAULT_WEIGHT }: AppIconProps) {
-  const { sf, lucide: Fallback } = ICONS[name];
+  const entry: { sf: SFSymbol; inner?: SFSymbol; lucide: LucideIcon } = ICONS[name];
+  const { sf, lucide: Fallback } = entry;
+  const fallback = <Fallback size={size} color={color} strokeWidth={LUCIDE_STROKE} />;
+
+  // Layered icons are iOS-only rather than per-view. `SymbolView` renders its
+  // own fallback when a platform has no symbol, so stacking two of them
+  // elsewhere would stack two lucide icons on top of each other.
+  if (entry.inner && Platform.OS !== 'ios') return fallback;
+
+  if (entry.inner) {
+    return (
+      <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+        <SymbolView
+          name={sf}
+          size={size}
+          tintColor={color}
+          weight={weight}
+          style={StyleSheet.absoluteFill}
+        />
+        <SymbolView
+          name={entry.inner}
+          size={size * INNER_FRACTION}
+          tintColor={color}
+          weight={weight}
+        />
+      </View>
+    );
+  }
 
   return (
-    <SymbolView
-      name={sf}
-      size={size}
-      tintColor={color}
-      weight={weight}
-      fallback={<Fallback size={size} color={color} strokeWidth={LUCIDE_STROKE} />}
-    />
+    <SymbolView name={sf} size={size} tintColor={color} weight={weight} fallback={fallback} />
   );
 }

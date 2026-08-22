@@ -20,7 +20,7 @@ export type TabParamList = {
 // the same navigation arrow, the same eye-in-brackets, the same gear - so the
 // change should be close to invisible.
 const TAB_ICONS: Record<keyof TabParamList, SFSymbol> = {
-  Navigate: 'location.north.fill',
+  Navigate: 'location.fill',
   HazardDetection: 'dot.viewfinder',
   Settings: 'gearshape.fill',
 };
@@ -73,11 +73,11 @@ export function TabNavigator() {
         name="HazardDetection"
         component={HazardDetectionScreen}
         options={{
-          // "Hazard Detection" is too long for a tab item - UIKit truncates
-          // rather than wrapping, and the custom bar used to shrink the text to
-          // fit. A native bar cannot, so the label is shortened instead of
-          // being cut off mid-word.
-          tabBarLabel: 'Hazards',
+          // The full name, matching the screen it opens. It is long for a tab
+          // item and UIKit truncates rather than wrapping, so this may shorten
+          // itself at the larger Text Sizes - but a name that matches the
+          // screen beats one that fits and does not.
+          tabBarLabel: 'Hazard Detection',
           tabBarIcon: () => ({ sfSymbol: TAB_ICONS.HazardDetection }),
         }}
       />

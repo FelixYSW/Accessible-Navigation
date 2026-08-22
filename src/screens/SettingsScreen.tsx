@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from 'react-native-bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
@@ -29,6 +30,9 @@ const TEXT_SIZES: { key: FontScaleKey; label: string }[] = [
 
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  // The native tab bar floats over the content rather than sitting under it,
+  // so the last row would otherwise be unreachable behind it.
+  const tabBarHeight = useBottomTabBarHeight();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const {
     T,
@@ -61,7 +65,7 @@ export function SettingsScreen() {
   return (
     <ScrollView
       style={{ backgroundColor: T.pageBg }}
-      contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 20 }}
+      contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: tabBarHeight + 20 }}
     >
       <Text style={[styles.title, { color: T.text, fontSize: F.h1 }]}>Settings</Text>
 
@@ -149,7 +153,7 @@ export function SettingsScreen() {
             accessible
             accessibilityLabel="Ordered from fastest to slowest"
           >
-            <AppIcon name="rabbit" size={scaled(18)} color={T.text2} />
+            <AppIcon name="rabbit" size={scaled(24)} color={T.text2} />
             <View style={styles.paceDots}>
               {PACE_DOTS.map((dot) => (
                 <View
@@ -166,7 +170,7 @@ export function SettingsScreen() {
                 />
               ))}
             </View>
-            <AppIcon name="turtle" size={scaled(18)} color={T.text2} />
+            <AppIcon name="turtle" size={scaled(24)} color={T.text2} />
           </View>
           <SegmentedField
             values={MOBILITY_AIDS.map((aid) => MOBILITY_AID_LABELS[aid])}

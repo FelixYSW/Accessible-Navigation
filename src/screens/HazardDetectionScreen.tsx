@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from 'react-native-bottom-tabs';
 import { useIsFocused } from '@react-navigation/native';
 import { HazardCameraView, isARGeospatialSupported } from '../../modules/ar-geospatial';
 import { CameraStage } from '../components/CameraStage';
@@ -18,6 +19,7 @@ import { useSpokenHazardCues } from '../services/voiceCues';
 // but with no route required - the third tab in the redesign.
 export function HazardDetectionScreen() {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const isFocused = useIsFocused();
   const { F, hazardActive, hazardCues } = useSettings();
 
@@ -85,7 +87,7 @@ export function HazardDetectionScreen() {
           No bottom safe-area padding: this is a tab screen, and the tab bar
           below it already covers the home indicator. */}
       {error && (
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { bottom: tabBarHeight + 16 }]}>
           <Text style={[styles.sheetTitle, { fontSize: F.body }]}>Detection unavailable</Text>
           <Text style={[styles.sheetSubtitle, { fontSize: F.tinySm }]}>{error}</Text>
         </View>
@@ -117,7 +119,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: SCREEN_MARGIN,
     right: SCREEN_MARGIN,
-    bottom: 32,
     backgroundColor: 'rgba(20,20,20,0.72)',
     borderRadius: RADIUS.section,
     paddingVertical: 16,

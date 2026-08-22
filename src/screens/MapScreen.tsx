@@ -14,6 +14,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { AppIcon } from '../components/AppIcon';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from 'react-native-bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
@@ -209,6 +210,10 @@ export function MapScreen() {
   // whole screen and every polyline on it.
   const pillLayerRef = useRef<RoutePillOverlayHandle>(null);
   const insets = useSafeAreaInsets();
+  // The native tab bar floats over the map, so everything anchored to the
+  // bottom of this screen - the route panel, the recentre button, and the
+  // strip the routes are framed into - has to start above it.
+  const tabBarHeight = useBottomTabBarHeight();
   const navigation = useNavigation<MapNavigation>();
   const { T, F, scaled, darkMode, mobilityAid } = useSettings();
 
@@ -492,7 +497,7 @@ export function MapScreen() {
         {
           edgePadding: {
             top: searchBarTop + (search || ESTIMATED_SEARCH_HEIGHT) + PILL_CLEARANCE.vertical,
-            bottom: SCREEN_MARGIN + (panel || ESTIMATED_PANEL_HEIGHT) + PILL_CLEARANCE.vertical,
+            bottom: SCREEN_MARGIN + tabBarHeight + (panel || ESTIMATED_PANEL_HEIGHT) + PILL_CLEARANCE.vertical,
             left: SCREEN_MARGIN + PILL_CLEARANCE.horizontal,
             right: SCREEN_MARGIN + PILL_CLEARANCE.horizontal,
           },
@@ -500,7 +505,7 @@ export function MapScreen() {
         },
       );
     },
-    [searchBarTop],
+    [searchBarTop, tabBarHeight],
   );
 
   // Re-framed only when a fresh set of routes arrives - never on re-selection,
@@ -1033,7 +1038,7 @@ export function MapScreen() {
               borderRadius: scaled(48) / 2,
               // Clears the route panel, which is only on screen while routes
               // are being previewed.
-              bottom: SCREEN_MARGIN + (previewing ? chromeHeights.current.panel + 10 : 0),
+              bottom: SCREEN_MARGIN + tabBarHeight + (previewing ? chromeHeights.current.panel + 10 : 0),
             },
             T.shadow,
           ]}
@@ -1191,7 +1196,7 @@ export function MapScreen() {
         <View
           style={[
             styles.routePanel,
-            { backgroundColor: T.cardRaised, bottom: SCREEN_MARGIN + keyboardHeight },
+            { backgroundColor: T.cardRaised, bottom: SCREEN_MARGIN + tabBarHeight + keyboardHeight },
             T.panelShadow,
           ]}
           onLayout={(e) => measureChrome('panel', e.nativeEvent.layout.height)}

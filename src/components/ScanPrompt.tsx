@@ -64,7 +64,7 @@ export function ScanPrompt({
       <View style={styles.card}>
         <View style={styles.icon}>
           <AppIcon
-            name="radar"
+            name="scan-buildings"
             size={scaled(40)}
             color={hopeless ? 'rgba(255,255,255,0.7)' : T.green}
           />

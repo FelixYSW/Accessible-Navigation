@@ -42,7 +42,7 @@ export function HazardIntro({ visible, error, onDismiss }: HazardIntroProps) {
       <View style={styles.card}>
         <View style={styles.icon}>
           <AppIcon
-            name="scan-eye"
+            name="scan-path"
             size={scaled(40)}
             color={error ? OVERLAY_RED : T.green}
           />
