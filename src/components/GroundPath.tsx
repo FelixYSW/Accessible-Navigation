@@ -63,8 +63,8 @@ const WALKED_FAR_OPACITY = 0.32;
 // Guidance that obscures the ground it is guiding you across is worse than no
 // guidance. The rim and halo keep it legible instead, and they outline rather
 // than cover.
-const NEAR_OPACITY = 0.5;
-const FAR_OPACITY = 0.35;
+const NEAR_OPACITY = 0.32;
+const FAR_OPACITY = 0.22;
 
 // A brightening that travels from the walker outwards, one pass every cycle.
 //

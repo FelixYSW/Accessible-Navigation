@@ -17,7 +17,6 @@ import {
   Crosshair,
   Droplets,
   IterationCcw,
-  IterationCw,
   MapPin,
   Rabbit,
   Radar,
@@ -74,8 +73,21 @@ const ICONS = {
   'scan-eye': { sf: 'dot.viewfinder', lucide: ScanEye },
   'triangle-alert': { sf: 'exclamationmark.triangle', lucide: TriangleAlert },
   turtle: { sf: 'tortoise', lucide: Turtle },
-  'uturn-left': { sf: 'arrow.uturn.left', lucide: IterationCcw },
-  'uturn-right': { sf: 'arrow.uturn.right', lucide: IterationCw },
+  // Head pointing down, which on a heads-up view means back towards the
+  // walker - the whole content of a turn-around instruction.
+  //
+  // `arrow.uturn.left` and `.right` were the obvious picks and were wrong.
+  // The suffix in that family names where the *arrowhead* ends up, so those
+  // two point left and right - which on a screen whose up is straight ahead
+  // reads as an ordinary left or right turn, exactly the instruction a u-turn
+  // is not. The loop being on the correct side does not rescue it: a walker
+  // glancing at a banner reads the head, not the curve.
+  //
+  // One symbol for both, because the app already gives both the same words -
+  // MANEUVER_LABELS says "Turn around" either way - and a glyph that split a
+  // hair the label does not would be inventing a distinction rather than
+  // showing one. Which way to swing is in the band on the ground.
+  uturn: { sf: 'arrow.uturn.down', lucide: IterationCcw },
   'volume-off': { sf: 'speaker.slash', lucide: VolumeX },
   'volume-on': { sf: 'speaker.wave.2', lucide: Volume2 },
   waves: { sf: 'water.waves', lucide: WavesHorizontal },

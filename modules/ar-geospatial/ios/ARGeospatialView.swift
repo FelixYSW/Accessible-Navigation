@@ -198,6 +198,14 @@ enum GroundPath {
   /// the switchback where the factor would run away.
   static let mitreLimit: Float = 2.5
 
+  /// The most any one vertex of a placed turn may bend by.
+  ///
+  /// Turning further than this at a single point stops looking like a corner
+  /// and starts looking like a fold, so a sharper turn is spread over as many
+  /// vertices as it needs. At 45 degrees the mitre reaches out by 1.08, which
+  /// is nothing - the limit above exists for route data, not for these.
+  static let maxTurnPerVertexDeg: Float = 45
+
   /// Where the room mesh sits in the draw order. Below everything, because
   /// what it contributes is the depth the band is then tested against.
   static let occluderOrder = -1000
@@ -235,8 +243,8 @@ enum GroundPath {
   /// them about. Guidance that obscures the ground it is guiding you across is
   /// worse than no guidance. The rim and halo are what keep it legible now,
   /// and they outline rather than cover.
-  static let nearOpacity: CGFloat = 0.5
-  static let farOpacity: CGFloat = 0.35
+  static let nearOpacity: CGFloat = 0.32
+  static let farOpacity: CGFloat = 0.22
   /// How wide the travelling highlight is, as a fraction of the run. Matches
   /// WAVE_WIDTH in GroundPath.tsx, and doubles as where the pulse sits inside
   /// its own texture - the two have to agree for advanceWave to place it.
@@ -616,15 +624,11 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // The angles are the middle of each band the navigation screen sorts real
     // manoeuvres into, so what is placed here is what a route classified as that
     // manoeuvre would actually draw.
-    let bend = turnRadians(for: previewComponent)
-    let bendAt = GroundPath.previewCount / 2
-
-    // Right-handed world with +Y up, so forward x up points to the walker's
-    // right. The same expression `bandFrames` uses, rather than a hand-written
-    // one - an earlier hand-written version had the sign inverted and turned
-    // left when it said right.
-    let right = simd_cross(forward, simd_float3(0, 1, 0))
-    let turned = forward * cos(bend) + right * sin(bend)
+    let (bend, vertices) = turnShape(for: previewComponent)
+    let perVertex = vertices > 0 ? bend / Float(vertices) : 0
+    // Far enough in that there is a straight approach to judge the corner
+    // against, and early enough to leave a leg on the other side of it.
+    let bendAt = 2
 
     var position = start
     var heading = forward
@@ -632,41 +636,55 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
     for step in 0..<GroundPath.previewCount {
       along.append(position)
-      // The turn happens at one vertex rather than being eased across several,
-      // because that is the shape a route polyline actually hands over: a list
-      // of corners, not a curve.
-      if step == bendAt { heading = turned }
+      if step >= bendAt, step < bendAt + vertices {
+        heading = turned(heading, by: perVertex)
+      }
       position += heading * GroundPath.previewSpacingM
     }
 
     place(at: along, kind: "path")
   }
 
-  /// How far the run turns at its bend, in radians. Positive is to the walker's
-  /// right; zero is a straight stretch.
+  /// How far the run turns, and over how many vertices it does the turning.
   ///
-  /// The values are the middle of each band `maneuverFromAngle` sorts real
+  /// The angles are the middle of each band `maneuverFromAngle` sorts real
   /// manoeuvres into on the navigation screen - 20/45/120/160 degrees - so each
   /// one places the shape a route classified as that manoeuvre would draw,
   /// rather than a round number that happens to look like it.
   ///
-  /// They also happen to cover the mitre join end to end. A slight turn barely
-  /// stretches the corner at all; a right angle reaches out by about 1.41; and
-  /// both the sharp turn and the u-turn ask for more than the limit allows and
-  /// come back cut square. If the corner is going to look wrong anywhere, it is
-  /// in one of these four.
-  private func turnRadians(for component: String) -> Float {
+  /// The spread is the part that took a device to work out. Turning the whole
+  /// angle at a single vertex is right for a street corner and nonsense for a
+  /// u-turn: at 175 degrees the run leaves and returns along very nearly the
+  /// same line, so the band folds onto itself, doubles its own opacity, and
+  /// hands the mitre a bisector that has all but collapsed. What came out was a
+  /// stack of overlapping wedges rather than a path.
+  ///
+  /// No real route does that either. A walker turning round walks an arc, and a
+  /// pavement that doubles back - a switchback ramp, the end of a barrier -
+  /// carries them round with metres between the two legs. So the turn is spread
+  /// over as many vertices as it takes to keep any one of them under
+  /// `maxTurnPerVertexDeg`, which gives the corner a radius, keeps the legs
+  /// apart, and incidentally keeps every mitre well inside its limit.
+  private func turnShape(for component: String) -> (radians: Float, vertices: Int) {
     let degrees: Float
     switch component {
     case "slight-left", "slight-right": degrees = 32
     case "left", "right": degrees = 90
     case "sharp-left", "sharp-right": degrees = 140
     case "uturn-left", "uturn-right": degrees = 175
-    default: return 0
+    default: return (0, 0)
     }
 
     let toTheLeft = component.hasSuffix("left")
-    return (toTheLeft ? -degrees : degrees) * .pi / 180
+    let vertices = max(1, Int((degrees / GroundPath.maxTurnPerVertexDeg).rounded(.up)))
+    return ((toTheLeft ? -degrees : degrees) * .pi / 180, vertices)
+  }
+
+  /// A horizontal unit vector turned about the vertical, positive to the
+  /// walker's right.
+  private func turned(_ heading: simd_float3, by radians: Float) -> simd_float3 {
+    let right = simd_cross(heading, simd_float3(0, 1, 0))
+    return heading * cos(radians) + right * sin(radians)
   }
 
   private func place(at positions: [simd_float3], kind: String) {

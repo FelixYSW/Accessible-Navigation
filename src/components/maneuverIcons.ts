@@ -33,9 +33,11 @@ export const MANEUVER_ICONS: Record<Maneuver, AppIconName> = {
   // what a sharp turn is.
   'sharp-left': 'corner-left-down',
   'sharp-right': 'corner-right-down',
-  // A loop that leaves upwards and returns downwards - the standard U-turn.
-  'uturn-left': 'uturn-left',
-  'uturn-right': 'uturn-right',
+  // Both sides share a glyph, as they already share a label - see the note in
+  // AppIcon. The arrow comes back down towards the walker, which is what a
+  // turn-around actually asks for.
+  'uturn-left': 'uturn',
+  'uturn-right': 'uturn',
   arrive: 'map-pin',
   locating: 'compass',
 };

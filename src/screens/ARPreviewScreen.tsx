@@ -246,15 +246,22 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   picker: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderRadius: OVERLAY_PILL_HEIGHT / 2,
     overflow: 'hidden',
-    // A horizontal ScrollView stretches to its parent unless told not to, and
-    // the pill has to end where its content does or it reads as an empty bar.
-    flexGrow: 0,
+    // Stretched to the row it sits in, and this is the whole of why it scrolls.
+    //
+    // The parent centres its children, so without this the ScrollView is sized
+    // by its own content - which makes its frame exactly as wide as all ten
+    // segments laid end to end. A scroll view whose frame matches its content
+    // has nothing to scroll: it takes the drag, finds no travel, and springs
+    // back. Stretching pins the frame to the width actually available, and the
+    // content is then genuinely wider than the window onto it.
+    alignSelf: 'stretch',
   },
+  // The row lives here rather than on the view above: a ScrollView lays out its
+  // children through the content container, and a flexDirection on the view
+  // itself is quietly ignored.
   pickerRow: { flexDirection: 'row', alignItems: 'stretch' },
   segment: {
     justifyContent: 'center',
