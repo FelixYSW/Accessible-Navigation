@@ -116,7 +116,36 @@ enum GroundPath {
   /// only has to be found once and then kept. Spreading the work means the band
   /// takes a moment to settle onto a slope after it appears rather than costing
   /// a raycast per point per tick forever.
-  static let groundProbesPerTick = 3
+  /// How often every point on the band is re-measured.
+  ///
+  /// Every point, every tick - not a few of them in rotation, and never
+  /// stopping. Both of those were tried and both were wrong.
+  ///
+  /// Measuring a few per tick let the band settle one point at a time, and a
+  /// shape whose vertices arrive in sequence looks like it is being rebuilt,
+  /// because it is. Measuring them together makes the same movement read as one
+  /// surface easing into place.
+  ///
+  /// Stopping altogether was worse, and wrong rather than merely ugly. The
+  /// reasoning was that the floor under a fixed patch of ground does not move,
+  /// so a point that has been read a few times has nothing left to learn. The
+  /// floor does not move - but the *estimate* of it does, and enormously. A
+  /// point eight metres down a slope is first measured against a plane ARKit
+  /// has extrapolated from the floor at the walker's feet, which puts it at
+  /// roughly their own height; only walking closer produces a reading worth
+  /// having. Freezing it at the first answer leaves the far end of the band
+  /// hanging in the air over the downhill, and no amount of walking brings it
+  /// back down.
+  ///
+  /// So it keeps measuring. The cost is bounded - a raycast per point at this
+  /// rate - and a point whose estimate has genuinely converged simply reads the
+  /// same number again and moves nowhere.
+  static let anchorProbeInterval: TimeInterval = 0.2
+
+  /// How long tracking has to stay lost before the walker is told to move the
+  /// phone. Short dips recover on their own well inside this, and advice that
+  /// arrives after the problem has fixed itself is worse than none.
+  static let readinessGraceSeconds: TimeInterval = 1.5
 
   /// How much of each new floor reading to take. The estimate wanders by a few
   /// centimetres between probes; taken raw, the whole ribbon bobs.
@@ -163,6 +192,25 @@ enum GroundPath {
   /// band is read at, that is about a centimetre.
   static let markerEdgeM: Float = 0.01
 
+  /// How far a mitred corner may reach past half the band's width before it
+  /// is cut off square. 1/cos(half the turn), so this is passed at about 143
+  /// degrees of turn - sharper than any corner a pavement takes, and short of
+  /// the switchback where the factor would run away.
+  static let mitreLimit: Float = 2.5
+
+  /// Where the room mesh sits in the draw order. Below everything, because
+  /// what it contributes is the depth the band is then tested against.
+  static let occluderOrder = -1000
+
+  /// How far the band floats above the floor it was measured on.
+  ///
+  /// Purely to survive the depth test against the room mesh. The mesh includes
+  /// the floor, and a band lying at exactly the measured floor height would be
+  /// in a coin-toss with it for every pixel - occluded in patches, which looks
+  /// far worse than not being occluded at all. Three centimetres is more than
+  /// the two surfaces disagree by and less than the eye reads as hovering.
+  static let bandLiftM: Float = 0.03
+
   /// The 3D renderer's stand-ins for the overlay's two strokes.
   ///
   /// The overlay draws an 8pt dark halo and a 2pt white rim around the band. A
@@ -179,8 +227,16 @@ enum GroundPath {
 
   /// The distance fade and the travelling highlight, matching GroundPath.tsx so
   /// that switching renderer changes only *when* the band is drawn.
-  static let nearOpacity: CGFloat = 0.95
-  static let farOpacity: CGFloat = 0.55
+  ///
+  /// Deliberately well short of opaque, and that is a safety decision rather
+  /// than a stylistic one. At 0.95 the band was a solid sheet of colour laid
+  /// over the pavement, which hid exactly what a walker most needs to see -
+  /// the kerb, the puddle, the broken slab, the thing this app exists to warn
+  /// them about. Guidance that obscures the ground it is guiding you across is
+  /// worse than no guidance. The rim and halo are what keep it legible now,
+  /// and they outline rather than cover.
+  static let nearOpacity: CGFloat = 0.5
+  static let farOpacity: CGFloat = 0.35
   /// How wide the travelling highlight is, as a fraction of the run. Matches
   /// WAVE_WIDTH in GroundPath.tsx, and doubles as where the pulse sits inside
   /// its own texture - the two have to agree for advanceWave to place it.
@@ -232,7 +288,7 @@ enum GroundPath {
 /// Where Street View has been, its VPS localisation gets that to about a metre;
 /// where it hasn't, it falls back to GPS and is no better than the phone's own
 /// fix - but the tracking underneath is unaffected either way.
-final class ARGeospatialView: ExpoView, ARSessionDelegate {
+final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   /// How far ahead the control anchors sit, in metres. Matches the distances
   /// the JS side labels them with.
   static let testDistancesM: [Double] = [3, 6, 10]
@@ -293,7 +349,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// advances past a point, and a cache keyed on position would then hand every
   /// remaining point its neighbour's height.
   private var anchorGroundY: [Int: Float] = [:]
-  private var groundProbeCursor = 0
   private var nextPreviewId = 0
   private var lastAnchorProbe: TimeInterval = 0
 
@@ -322,18 +377,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   private var previewRuns: [PreviewRun] = []
   private var previewTap: UITapGestureRecognizer?
 
-  /// Which renderer draws the band: "scene" for SceneKit geometry inside the AR
-  /// scene, "overlay" for the projected polygons the JS layer draws on top.
-  ///
-  /// The difference is not cosmetic. An overlay is computed from one camera
-  /// frame and composited a frame or two later, over a preview that has moved
-  /// on - which is exactly the sliding that stops it feeling attached to the
-  /// ground. Geometry in the scene is rasterised in the same pass as the camera
-  /// image it sits on, so it cannot be late, and it can be occluded and lit.
-  ///
-  /// What the overlay keeps is that its whole appearance lives in JS, where it
-  /// can be restyled without a build.
-  private var previewRenderer = "scene"
 
   /// The nodes currently in the scene, one per preview run, and whether the
   /// last frame could have placed something.
@@ -353,7 +396,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// restart that animation from the beginning. Rebuilding on a timer made the
   /// sweep stutter ten times a second.
   private var builtRunCount = -1
-  private var builtGroundY: Float?
+  private var builtHeights: [Float] = []
   private var builtSplits: [Int] = []
 
   /// Built once and kept. Neither ramp ever changes, and both allocate a bitmap.
@@ -367,6 +410,11 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   private var previewReady = false
   private var previewStateSent = false
   private var lastReadinessProbe: TimeInterval = 0
+  /// The last value handed to JS, so the event fires on change rather than on
+  /// every probe.
+  private var previewReadySent = false
+  /// When tracking was first seen to be gone, or nil while it is fine.
+  private var trackingLostSince: TimeInterval?
   private var previewPlacedCount = 0
 
   /// One thing put down by a tap: a stretch of path, or a pin.
@@ -414,6 +462,10 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     sceneView.frame = bounds
     sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     sceneView.session.delegate = self
+    // Separate from the session delegate above and doing a different job:
+    // this one is told about the nodes SceneKit makes for anchors, which is
+    // where the room mesh is turned into an occluder.
+    sceneView.delegate = self
     addSubview(sceneView)
 
     startTracking()
@@ -478,7 +530,9 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     // cannot yet honour.
     previewStateSent = false
     previewReady = false
+    previewReadySent = false
     previewPlacedCount = 0
+    trackingLostSince = nil
 
     if !on {
       clearPreview()
@@ -490,14 +544,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     previewComponent = component
   }
 
-  func setPreviewRenderer(_ renderer: String) {
-    guard renderer != previewRenderer else { return }
-    previewRenderer = renderer
-    // Whichever renderer is stepping down leaves nothing behind: the scene
-    // nodes are torn out, and an empty anchor list clears the JS overlay.
-    clearPreviewNodes()
-    if previewMode { onAnchorsUpdate(["anchors": [] as [[String: Any]]]) }
-  }
 
   private func clearPreviewNodes() {
     for node in previewNodes { node.removeFromParentNode() }
@@ -508,7 +554,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     // decline to rebuild the very thing it just removed.
     builtRunCount = -1
     builtSplits = []
-    builtGroundY = nil
+    builtHeights = []
   }
 
   /// Cleared by a token rather than by a method call, because a view in this
@@ -559,27 +605,68 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
     // A stretch of path as the navigation screen lays one out: the same anchor
     // spacing over the same number of points, starting at the tap and leading
-    // away from the phone.
+    // away from the phone, with whatever turn was asked for halfway along.
     //
-    // The turn is the same run with a corner in it, and it exists because a
-    // straight stretch never exercises the part of the band most likely to be
-    // wrong. Every point is swept perpendicular to the direction the path runs
-    // through it, so at a corner the two sweeps disagree and the outside edge
-    // has to bridge the gap - which cannot be judged anywhere a route with a
-    // corner in it has not been walked. This puts one on any floor.
+    // The turns exist because a straight stretch never exercises the part of the
+    // band most likely to be wrong. Every point is swept along the bisector of
+    // the headings meeting at it, pushed out by 1/cos(half the turn) - so how
+    // that corner behaves depends entirely on the angle, and the only honest way
+    // to see it is to put each angle on a floor and look at it.
+    //
+    // The angles are the middle of each band the navigation screen sorts real
+    // manoeuvres into, so what is placed here is what a route classified as that
+    // manoeuvre would actually draw.
+    let bend = turnRadians(for: previewComponent)
     let bendAt = GroundPath.previewCount / 2
-    let right = simd_float3(forward.z, 0, -forward.x)
 
-    let along = (0..<GroundPath.previewCount).map { step -> simd_float3 in
-      let before = min(step, bendAt)
-      let after = max(0, step - bendAt)
-      return start
-        + forward * (Float(before) * GroundPath.previewSpacingM)
-        + (previewComponent == "turn"
-          ? right * (Float(after) * GroundPath.previewSpacingM)
-          : forward * (Float(after) * GroundPath.previewSpacingM))
+    // Right-handed world with +Y up, so forward x up points to the walker's
+    // right. The same expression `bandFrames` uses, rather than a hand-written
+    // one - an earlier hand-written version had the sign inverted and turned
+    // left when it said right.
+    let right = simd_cross(forward, simd_float3(0, 1, 0))
+    let turned = forward * cos(bend) + right * sin(bend)
+
+    var position = start
+    var heading = forward
+    var along: [simd_float3] = []
+
+    for step in 0..<GroundPath.previewCount {
+      along.append(position)
+      // The turn happens at one vertex rather than being eased across several,
+      // because that is the shape a route polyline actually hands over: a list
+      // of corners, not a curve.
+      if step == bendAt { heading = turned }
+      position += heading * GroundPath.previewSpacingM
     }
+
     place(at: along, kind: "path")
+  }
+
+  /// How far the run turns at its bend, in radians. Positive is to the walker's
+  /// right; zero is a straight stretch.
+  ///
+  /// The values are the middle of each band `maneuverFromAngle` sorts real
+  /// manoeuvres into on the navigation screen - 20/45/120/160 degrees - so each
+  /// one places the shape a route classified as that manoeuvre would draw,
+  /// rather than a round number that happens to look like it.
+  ///
+  /// They also happen to cover the mitre join end to end. A slight turn barely
+  /// stretches the corner at all; a right angle reaches out by about 1.41; and
+  /// both the sharp turn and the u-turn ask for more than the limit allows and
+  /// come back cut square. If the corner is going to look wrong anywhere, it is
+  /// in one of these four.
+  private func turnRadians(for component: String) -> Float {
+    let degrees: Float
+    switch component {
+    case "slight-left", "slight-right": degrees = 32
+    case "left", "right": degrees = 90
+    case "sharp-left", "sharp-right": degrees = 140
+    case "uturn-left", "uturn-right": degrees = 175
+    default: return 0
+    }
+
+    let toTheLeft = component.hasSuffix("left")
+    return (toTheLeft ? -degrees : degrees) * .pi / 180
   }
 
   private func place(at positions: [simd_float3], kind: String) {
@@ -614,6 +701,27 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     configuration.worldAlignment = .gravity
     // The ground the arrows are drawn on, found rather than assumed.
     configuration.planeDetection = [.horizontal]
+
+    // A mesh of the room, on the devices that can build one, so the guidance
+    // can be hidden by the things that are actually in front of it.
+    //
+    // This is the difference between a marking on the ground and a sticker on
+    // the lens. Without it a path that runs on behind a wall is still drawn
+    // across the wall, which says the walkway is there when it is not - and on
+    // a street that is not a cosmetic problem, because the same drawing that
+    // paints through a wall paints over a bollard, a step, or a person.
+    if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+      configuration.sceneReconstruction = .mesh
+    }
+
+    // People are the case the mesh is worst at - they move, and the mesh is
+    // built for a static room. ARKit segments them out of the frame directly,
+    // and ARSCNView applies that itself once the semantic is on, so a walker
+    // stepping between the phone and the band occludes it correctly.
+    if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+      configuration.frameSemantics.insert(.personSegmentationWithDepth)
+    }
+
     sceneView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
   }
 
@@ -640,6 +748,69 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
   func session(_ session: ARSession, didFailWithError error: Error) {
     report(failure: "Camera tracking failed: \(error.localizedDescription)")
+  }
+
+  // MARK: - Occlusion
+
+  func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+    applyOccluder(to: node, for: anchor)
+  }
+
+  func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+    applyOccluder(to: node, for: anchor)
+  }
+
+  /// Turns a piece of the reconstructed room into something that blocks the
+  /// guidance without being drawn itself.
+  ///
+  /// The trick is a material that writes depth and no colour. The mesh is
+  /// rendered first, filling the depth buffer with how far away the real
+  /// world is; the band is rendered after and depth-tested against it, so any
+  /// part of the band further away than a wall simply fails the test. Nothing
+  /// of the mesh itself ever appears - what the camera shows through it is the
+  /// wall, which is the correct picture.
+  private func applyOccluder(to node: SCNNode, for anchor: ARAnchor) {
+    guard #available(iOS 13.4, *), let mesh = anchor as? ARMeshAnchor else { return }
+
+    let geometry = occluderGeometry(from: mesh.geometry)
+    let material = SCNMaterial()
+    material.colorBufferWriteMask = []
+    material.writesToDepthBuffer = true
+    material.readsFromDepthBuffer = true
+    geometry.materials = [material]
+
+    node.geometry = geometry
+    // Before everything: the depth it lays down is what the band is tested
+    // against, so it has to be there before the band is drawn.
+    node.renderingOrder = GroundPath.occluderOrder
+  }
+
+  /// ARKit's mesh, wrapped as SceneKit geometry.
+  ///
+  /// The buffers are handed over as they are rather than copied out and
+  /// rebuilt: the mesh is thousands of triangles and is revised continuously,
+  /// so unpacking it every update would cost far more than the occlusion is
+  /// worth.
+  @available(iOS 13.4, *)
+  private func occluderGeometry(from mesh: ARMeshGeometry) -> SCNGeometry {
+    let vertices = SCNGeometrySource(
+      buffer: mesh.vertices.buffer,
+      vertexFormat: mesh.vertices.format,
+      semantic: .vertex,
+      vertexCount: mesh.vertices.count,
+      dataOffset: mesh.vertices.offset,
+      dataStride: mesh.vertices.stride
+    )
+
+    let faces = mesh.faces
+    let element = SCNGeometryElement(
+      data: Data(bytes: faces.buffer.contents(), count: faces.buffer.length),
+      primitiveType: .triangles,
+      primitiveCount: faces.count,
+      bytesPerIndex: faces.bytesPerIndex
+    )
+
+    return SCNGeometry(sources: [vertices], elements: [element])
   }
 
   /// The height of the floor in ARKit's world, found by looking straight down
@@ -934,17 +1105,18 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       // Placements get their floor found under each point, the same as route
       // anchors do, which is what lets a band laid down a ramp follow it.
       probeAnchorGround(previewGroundPoints(), arFrame: arFrame)
+      updatePreviewGeometry(arFrame: arFrame)
 
-      if previewRenderer == "scene" {
-        updatePreviewGeometry(arFrame: arFrame)
-        // Nothing for the JS overlay to draw: the scene is drawing it. The pin
-        // is the exception - the 3D one is a plain stand-in and the drawn pin
-        // is still worth looking at, so its projected point still goes over.
-        emitPreviewAnchors(arFrame: arFrame, viewport: viewport, pinsOnly: true)
-      } else {
-        clearPreviewNodes()
-        emitPreviewAnchors(arFrame: arFrame, viewport: viewport, pinsOnly: false)
-      }
+      // Only the pin goes over to the JS layer. The band is drawn in the
+      // scene now, and there is no longer a second version of it to compare
+      // against - the comparison is settled.
+      //
+      // The pin stays where it is, and that is not the same thing as being
+      // left behind. A destination marker has to face the walker from every
+      // approach, which is what a flat sprite at a projected point is; the
+      // band lies on the ground and belongs in the geometry. Each is drawn
+      // where its own shape wants to be.
+      emitPreviewAnchors(arFrame: arFrame, viewport: viewport, pinsOnly: true)
       return
     }
 
@@ -1044,11 +1216,12 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   /// own height is the thing being corrected - starting at it would mean a
   /// point that has floated up cannot see the ground it floated away from.
   private func probeAnchorGround(_ points: [(id: Int, position: simd_float3)], arFrame: ARFrame) {
-    // Throttled on its own clock. `emitAnchors` runs on every ARKit frame, and
-    // at 60Hz an unthrottled three-per-call would be 180 raycasts a second to
-    // re-measure ground that is not going anywhere.
+    // Throttled on its own clock, and slower than the walker's own floor probe.
+    // `emitAnchors` runs on every ARKit frame, and this measures every point on
+    // the band, so at 60Hz it would be well over a thousand raycasts a second.
+    // Five times a second is quicker than the ground estimate improves.
     let now = arFrame.timestamp
-    guard now - lastAnchorProbe > GroundPath.groundProbeInterval else { return }
+    guard now - lastAnchorProbe > GroundPath.anchorProbeInterval else { return }
     lastAnchorProbe = now
 
     guard !points.isEmpty else {
@@ -1063,10 +1236,9 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
 
     let cameraY = arFrame.camera.transform.columns.3.y
 
-    for _ in 0..<min(GroundPath.groundProbesPerTick, points.count) {
-      groundProbeCursor = (groundProbeCursor + 1) % points.count
-      let point = points[groundProbeCursor]
-
+    // Every point, together, so the band eases as one surface rather than
+    // settling a vertex at a time - see anchorProbeInterval.
+    for point in points {
       let from = simd_float3(point.position.x, cameraY, point.position.z)
       guard let measured = floorHeight(below: from, cameraY: cameraY, tolerance: .slope) else {
         continue
@@ -1075,6 +1247,9 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       if let current = anchorGroundY[point.id] {
         anchorGroundY[point.id] = current + (measured - current) * GroundPath.groundSmoothing
       } else {
+        // The first reading is taken whole. There is nothing to ease from, and
+        // easing up from the walker's own floor would make every new point
+        // visibly slide into place from the wrong height.
         anchorGroundY[point.id] = measured
       }
     }
@@ -1133,16 +1308,26 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       Int((walkerFraction(along: run, arFrame: arFrame) / GroundPath.rebuildSplitStep).rounded())
     }
 
-    let floorMoved = builtGroundY == nil
-      || groundY == nil
-      || abs((groundY ?? 0) - (builtGroundY ?? 0)) > GroundPath.rebuildFloorDeltaM
-    guard previewRuns.count != builtRunCount || splits != builtSplits || floorMoved else {
+    // Compared against the heights the band is actually built from, not
+    // against the floor under the walker.
+    //
+    // Those are different numbers on a slope, which is the whole point: the
+    // walker's floor changes with every step downhill, so keying the rebuild
+    // to it meant rebuilding constantly while descending even though the band
+    // ahead had not moved at all.
+    let heights = previewGroundPoints().map { anchorGroundY[$0.id] ?? groundY ?? 0 }
+    let shapeMoved = heights.count != builtHeights.count
+      || zip(heights, builtHeights).contains {
+        abs($0 - $1) > GroundPath.rebuildFloorDeltaM
+      }
+
+    guard previewRuns.count != builtRunCount || splits != builtSplits || shapeMoved else {
       return
     }
 
     builtRunCount = previewRuns.count
     builtSplits = splits
-    builtGroundY = groundY
+    builtHeights = heights
 
     clearPreviewNodes()
 
@@ -1258,19 +1443,19 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       let halo = strip(
         along: points,
         halfWidth: half + GroundPath.haloWidthM,
-        lift: 0,
+        lift: GroundPath.bandLiftM,
         vScale: nil
       ),
       let rim = strip(
         along: points,
         halfWidth: half + GroundPath.rimWidthM,
-        lift: GroundPath.layerLiftM,
+        lift: GroundPath.bandLiftM + GroundPath.layerLiftM,
         vScale: nil
       ),
       let fill = strip(
         along: points,
         halfWidth: half,
-        lift: GroundPath.layerLiftM * 2,
+        lift: GroundPath.bandLiftM + GroundPath.layerLiftM * 2,
         // The fill is the one strip that is textured, so it is the one that
         // needs the distance running along it. Normalised over the band's whole
         // length, so the fade spans exactly what is drawn.
@@ -1308,7 +1493,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     if !walked, let wave = strip(
       along: points,
       halfWidth: half,
-      lift: GroundPath.layerLiftM * 3,
+      lift: GroundPath.bandLiftM + GroundPath.layerLiftM * 3,
       // Normalised over the band, not repeating every few metres. Repeating
       // was the obvious choice - it makes the sweep a speed over the ground -
       // but it is not what the overlay does, and on a band longer than the
@@ -1352,7 +1537,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
         along: points,
         grow: GroundPath.markerEdgeM,
         color: UIColor(white: 0, alpha: 0.35),
-        lift: GroundPath.markerLiftM,
+        lift: GroundPath.bandLiftM + GroundPath.markerLiftM,
         order: -11
       ) {
         node.addChildNode(edge)
@@ -1361,7 +1546,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
         along: points,
         grow: 0,
         color: UIColor(white: 1, alpha: 0.92),
-        lift: GroundPath.markerLiftM + GroundPath.layerLiftM,
+        lift: GroundPath.bandLiftM + GroundPath.markerLiftM + GroundPath.layerLiftM,
         order: -10
       ) {
         node.addChildNode(markers)
@@ -1369,6 +1554,88 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     }
 
     return node
+  }
+
+  /// How the band sits at one point on its centreline: which way it runs
+  /// through that point, and how far to step sideways to reach its edge.
+  private struct BandFrame {
+    /// Unit vector along the direction of travel.
+    let along: simd_float3
+    /// Unit vector to the walker's right, square to `along`. What the
+    /// direction markers are built on, since a marker is not mitred.
+    let side: simd_float3
+    /// Centre to edge, already mitred - so at a corner it leans into the
+    /// bend and reaches further than half the width.
+    let offset: simd_float3
+  }
+
+  /// The band's frame at every point on a centreline, with the corners
+  /// mitred.
+  ///
+  /// This is what makes a turn look like a turn. Sweeping each point square
+  /// to the direction *leaving* it - which is what this did at first - means
+  /// the point before a corner is swept along the old heading and the corner
+  /// itself along the new one, so the quad between them is not a rectangle but
+  /// a sheared trapezoid. On a right angle that shows as a notch bitten out of
+  /// the inside of the bend and a flap hanging off the outside.
+  ///
+  /// A mitre fixes it the way it is fixed in every line renderer: the corner
+  /// point is swept along the bisector of the two headings instead, and pushed
+  /// out by 1/cos(half the turn) so that both arms still finish at the full
+  /// half-width. At ninety degrees that is about 1.41 - unremarkable. It only
+  /// misbehaves as the turn approaches a full reversal, where the bisector
+  /// collapses and the factor runs away, which is what the limit is for: past
+  /// it the corner is cut off square rather than allowed to shoot off to
+  /// infinity. Walking routes do double back on themselves at switchbacks, so
+  /// that case is real rather than theoretical.
+  private func bandFrames(_ points: [PathPoint], halfWidth: Float) -> [BandFrame?] {
+    let up = simd_float3(0, 1, 0)
+    var frames: [BandFrame?] = []
+    var previous: simd_float3?
+
+    for i in points.indices {
+      let incoming = i > 0
+        ? flattened(points[i].position - points[i - 1].position)
+        : nil
+      let outgoing = i + 1 < points.count
+        ? flattened(points[i + 1].position - points[i].position)
+        : nil
+
+      // The ends have only one heading, and a repeated coordinate has none of
+      // its own - it inherits, rather than collapsing the band to a line.
+      guard
+        let into = incoming ?? outgoing ?? previous,
+        let outOf = outgoing ?? incoming ?? previous
+      else {
+        frames.append(nil)
+        continue
+      }
+      previous = outOf
+
+      let sideIn = simd_cross(into, up)
+      let sideOut = simd_cross(outOf, up)
+      let sum = sideIn + sideOut
+      let length = simd_length(sum)
+
+      // A near reversal: the two normals cancel and there is no bisector to
+      // speak of. Square to the outgoing leg is the only sane answer.
+      guard length > 1e-3 else {
+        frames.append(BandFrame(along: outOf, side: sideOut, offset: sideOut * halfWidth))
+        continue
+      }
+
+      let bisector = sum / length
+      // The bisector is a unit vector, so its dot with either normal is the
+      // cosine of half the turn - and the reach needed is its reciprocal.
+      let cosHalf = max(simd_dot(bisector, sideOut), 1e-3)
+      let reach = min(GroundPath.mitreLimit, 1 / cosHalf)
+
+      frames.append(
+        BandFrame(along: outOf, side: sideOut, offset: bisector * (halfWidth * reach))
+      )
+    }
+
+    return frames
   }
 
   /// How the texture coordinate running along a strip is scaled.
@@ -1393,23 +1660,17 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   ) -> SCNNode? {
     var vertices: [SCNVector3] = []
     var centres: [simd_float3] = []
-    var lastTangent: simd_float3?
+    let frames = bandFrames(points, halfWidth: halfWidth)
 
     for (i, point) in points.enumerated() {
-      let centre = point.position
-      let tangent = i + 1 < points.count
-        ? flattened(points[i + 1].position - centre)
-        : flattened(centre - points[i - 1].position)
-      guard let along = tangent ?? lastTangent else { continue }
-      lastTangent = along
+      guard let frame = frames[i] else { continue }
 
-      let across = simd_cross(along, simd_float3(0, 1, 0)) * halfWidth
-      let raised = centre + simd_float3(0, lift, 0)
-      let left = raised - across
-      let right = raised + across
+      let raised = point.position + simd_float3(0, lift, 0)
+      let left = raised - frame.offset
+      let right = raised + frame.offset
       vertices.append(SCNVector3(left.x, left.y, left.z))
       vertices.append(SCNVector3(right.x, right.y, right.z))
-      centres.append(centre)
+      centres.append(point.position)
     }
 
     guard vertices.count >= 4 else { return nil }
@@ -1464,18 +1725,16 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     let halfWidth = GroundPath.markerWidthM / 2 + grow
 
     var vertices: [SCNVector3] = []
-    var lastTangent: simd_float3?
+    // Square to the direction of travel, not mitred. A marker is a shape
+    // lying in the band rather than part of its edge, so leaning it into a
+    // corner would skew the triangle instead of closing a join.
+    let frames = bandFrames(points, halfWidth: halfWidth)
 
     for (i, point) in points.enumerated() {
+      guard point.marker, let frame = frames[i] else { continue }
       let centre = point.position
-      let tangent = i + 1 < points.count
-        ? flattened(points[i + 1].position - centre)
-        : flattened(centre - points[i - 1].position)
-      guard let along = tangent ?? lastTangent else { continue }
-      lastTangent = along
-      guard point.marker else { continue }
-
-      let side = simd_cross(along, simd_float3(0, 1, 0))
+      let along = frame.along
+      let side = frame.side
       let raise = simd_float3(0, lift, 0)
 
       for corner in [
@@ -1603,8 +1862,21 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
   ///
   /// The test is the same raycast a tap would run, from the middle of the
   /// screen, so what the overlay promises and what a tap can actually do cannot
-  /// come apart. Reported only on change - this runs every frame and the answer
-  /// is stable for seconds at a time.
+  /// come apart.
+  ///
+  /// But it *latches*, and that is the important part. Asked fresh each time,
+  /// this is a question about where the phone happens to be pointing right now,
+  /// and the honest answer flickers: look up at a wall, step in close over the
+  /// band, tilt to read something, and the middle of the frame leaves the floor
+  /// for a moment. Reported straight through, that put the scanning overlay back
+  /// over the screen every few seconds during ordinary use - which is both
+  /// wrong and maddening, because the session had not lost anything.
+  ///
+  /// Finding the floor is not a state the session drops in and out of. Once it
+  /// has one, it keeps it, and a raycast that misses means the camera is aimed
+  /// somewhere else. So only a genuine loss of tracking takes it back - and even
+  /// then not instantly, because tracking dips briefly for all sorts of reasons
+  /// that resolve themselves before anyone could act on the advice.
   private func updatePreviewReadiness(arFrame: ARFrame) {
     // Throttled: this raycasts, and at 60Hz it would be a raycast a frame to
     // re-answer a question whose answer holds for seconds.
@@ -1619,10 +1891,24 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     }
 
     let centre = CGPoint(x: bounds.midX, y: bounds.midY)
-    let ready = tracking
-      && bounds.width > 0
+    let onSurface = bounds.width > 0
       && sceneView.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: .horizontal)
         .map { !sceneView.session.raycast($0).isEmpty } ?? false
+
+    if tracking && onSurface {
+      trackingLostSince = nil
+      previewReady = true
+    } else if tracking {
+      // Pointing away from the floor. Nothing has gone wrong and there is
+      // nothing to tell the user, so this says nothing at all.
+      trackingLostSince = nil
+    } else {
+      // Tracking itself is gone, which is the one case where asking the user to
+      // move the phone is real advice rather than noise.
+      let since = trackingLostSince ?? now
+      trackingLostSince = since
+      if now - since > GroundPath.readinessGraceSeconds { previewReady = false }
+    }
 
     // How many things are down travels on the same event rather than being
     // counted in JS from the anchor list. Under the scene renderer that list is
@@ -1631,13 +1917,14 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     // taps had landed.
     let placed = previewRuns.count
 
-    guard ready != previewReady || placed != previewPlacedCount || !previewStateSent else {
-      return
-    }
-    previewReady = ready
+    guard
+      previewReady != previewReadySent || placed != previewPlacedCount || !previewStateSent
+    else { return }
+
+    previewReadySent = previewReady
     previewPlacedCount = placed
     previewStateSent = true
-    onPreviewState(["ready": ready, "placed": placed])
+    onPreviewState(["ready": previewReady, "placed": placed])
   }
 
   /// The tapped placements, projected exactly the way a real route is.
@@ -1725,31 +2012,21 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
     var markers: [Double] = []
     var nearest = Float.greatestFiniteMagnitude
     var nearestPoint = CGPoint.zero
-    var lastTangent: simd_float3?
+    // Mitred at the corners, the same as the scene renderer - see bandFrames.
+    let frames = bandFrames(visible, halfWidth: half)
 
     for (i, point) in visible.enumerated() {
       let centre = point.position
-      // The direction the path runs *through* this point. Taken from the
-      // segment ahead where there is one and the segment behind at the end, so
-      // both edges stay parallel to the centreline rather than mitring - a
-      // proper mitre join buys nothing at these angles and blows up on a
-      // hairpin, where the two segments are nearly opposed.
-      let tangent = i + 1 < visible.count
-        ? flattened(visible[i + 1].position - centre)
-        : flattened(centre - visible[i - 1].position)
-      // Consecutive anchors can land on top of each other when the route
-      // doubles back; carrying the previous direction is better than a zero
-      // vector, which would collapse the ribbon to a line at that point.
-      guard let along = tangent ?? lastTangent else { continue }
-      lastTangent = along
+      guard let frame = frames[i] else { continue }
+      let along = frame.along
+      let side = frame.side
 
-      // Right-handed world with +Y up, so forward x up points to the walker's
-      // right - the axis the ribbon's width runs along.
-      let side = simd_cross(along, simd_float3(0, 1, 0))
-      let across = side * half
-
-      let left = screenPoint(of: centre - across, arFrame: arFrame, viewport: viewport)
-      let right = screenPoint(of: centre + across, arFrame: arFrame, viewport: viewport)
+      let left = screenPoint(
+        of: centre - frame.offset, arFrame: arFrame, viewport: viewport
+      )
+      let right = screenPoint(
+        of: centre + frame.offset, arFrame: arFrame, viewport: viewport
+      )
       guard left.inFront, right.inFront else { continue }
 
       leftEdge.append(left.point)

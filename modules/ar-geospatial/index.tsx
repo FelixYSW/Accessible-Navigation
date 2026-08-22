@@ -100,30 +100,29 @@ export interface HazardsEvent {
 /** The components that can be placed by hand in preview mode.
  *
  *  Only two things in this app are drawn at a fixed point in the world: the
- *  ground path and the destination pin. The compass band is relative to the
+ *  ground band and the destination pin. The compass band is relative to the
  *  camera and the hazard boxes come from the detector, so neither can be put
  *  anywhere.
  *
- *  A tap in "path" mode lays a stretch of ribbon at the same anchor spacing a
- *  real route uses, so what is being looked at is the real thing at its real
- *  density. "turn" is the same run with a right-angle corner halfway along -
- *  the one shape a straight stretch cannot show, and the one most likely to
- *  look wrong. There is no single-element option: the band has no elements to
- *  place one of. */
-export type PreviewComponent = 'path' | 'turn' | 'pin';
-
-/** Which renderer draws the guidance in preview mode.
+ *  Everything but `pin` is the same band; they differ only in the shape of the
+ *  run a tap lays down. `path` is straight, and the rest bend halfway along by
+ *  the angle the navigation screen would classify as that manoeuvre - the same
+ *  names it uses in `Maneuver`, so what is placed is what a route calling for
+ *  that turn would actually draw.
  *
- *  `scene` builds it as SceneKit geometry inside the AR session, so it is
- *  rasterised in the same pass as the camera image and cannot be a frame
- *  behind it. `overlay` is the shipping path: the native side projects the
- *  shape to screen coordinates and `GroundPath` draws them in SVG on top of
- *  the preview, which costs a bridge hop and a React render before anything
- *  appears - and that delay is what stops it feeling attached to the ground.
- *
- *  Both exist so the two can be put side by side on a real pavement, which is
- *  the only place the trade between them can honestly be judged. */
-export type PreviewRenderer = 'scene' | 'overlay';
+ *  There is no single-element option: the band has no elements to place one
+ *  of. */
+export type PreviewComponent =
+  | 'path'
+  | 'slight-left'
+  | 'slight-right'
+  | 'left'
+  | 'right'
+  | 'sharp-left'
+  | 'sharp-right'
+  | 'uturn-left'
+  | 'uturn-right'
+  | 'pin';
 
 /** What preview mode can currently do, and what is currently down. */
 export interface PreviewState {
@@ -154,8 +153,6 @@ export interface ARGeospatialViewProps extends ViewProps {
   previewMode?: boolean;
   /** What the next tap puts down. */
   previewComponent?: PreviewComponent;
-  /** Which renderer draws it. */
-  previewRenderer?: PreviewRenderer;
   /** Any change removes everything placed so far. The value means nothing. */
   previewClearToken?: number;
   onGeospatialUpdate?: (event: { nativeEvent: GeospatialUpdate }) => void;

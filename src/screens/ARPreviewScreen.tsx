@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/RootNavigator';
@@ -7,10 +7,15 @@ import {
   ARGeospatialView,
   isARGeospatialSupported,
   type PreviewComponent,
-  type PreviewRenderer,
   type PreviewState,
   type ProjectedAnchor,
 } from '../../modules/ar-geospatial';
+import { AppIcon } from '../components/AppIcon';
+import {
+  MANEUVER_ICONS,
+  MANEUVER_LABELS,
+  type Maneuver,
+} from '../components/maneuverIcons';
 import { ARScanOverlay } from '../components/ARScanOverlay';
 import { CameraStage } from '../components/CameraStage';
 import { GroundPath } from '../components/GroundPath';
@@ -22,30 +27,42 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ARPreview'>;
 
 // Every component that can be placed by hand, and what each is for.
 //
-// The list is short because only two things in this app are drawn at a fixed
-// point in the world - the guidance band and the destination pin. The compass
-// band follows the camera and the hazard boxes follow the detector, so neither
-// is a thing you can put somewhere. Path and Turn are the same component; they
-// differ only in the shape of the run a tap lays down.
-const COMPONENTS: { key: PreviewComponent; label: string; hint: string }[] = [
-  { key: 'path', label: 'Path', hint: 'A stretch of the guidance band, leading away from you' },
-  { key: 'turn', label: 'Turn', hint: 'The same band with a right-angle corner halfway along' },
-  { key: 'pin', label: 'Pin', hint: 'The destination marker' },
+// Only two things in this app are drawn at a fixed point in the world - the
+// guidance band and the destination pin. The compass band follows the camera
+// and the hazard boxes follow the detector, so neither is a thing you can put
+// somewhere.
+//
+// So everything but the pin is the same band, differing only in the shape of
+// the run a tap lays down. They are named after the manoeuvres the navigation
+// screen classifies real turns into, and bend by the middle angle of each of
+// those bands - a route calling for a sharp left draws what 'Sharp L' places.
+//
+// Paired by severity rather than grouped by side, because the useful
+// comparison is between a slight turn and a sharp one; left against right is
+// a mirror image and the geometry behaves identically either way.
+// Each placement also names the manoeuvre the navigation screen would call it,
+// which is what puts that screen's own arrow on this one. Scrolling the picker
+// therefore walks through every arrow the header card can show - the whole set
+// bar `locating`, which is not a turn but the state before there is one.
+const COMPONENTS: {
+  key: PreviewComponent;
+  label: string;
+  place: string;
+  hint: string;
+  maneuver: Maneuver;
+}[] = [
+  { key: 'path', label: 'Path', place: 'a straight path', hint: 'A straight stretch of the guidance band', maneuver: 'straight' },
+  { key: 'slight-left', label: 'Slight L', place: 'a slight left', hint: 'A gentle bend to the left, as a kink in a pavement', maneuver: 'slight-left' },
+  { key: 'slight-right', label: 'Slight R', place: 'a slight right', hint: 'A gentle bend to the right, as a kink in a pavement', maneuver: 'slight-right' },
+  { key: 'left', label: 'Left', place: 'a left turn', hint: 'A right-angle turn to the left, as at a junction', maneuver: 'left' },
+  { key: 'right', label: 'Right', place: 'a right turn', hint: 'A right-angle turn to the right, as at a junction', maneuver: 'right' },
+  { key: 'sharp-left', label: 'Sharp L', place: 'a sharp left', hint: 'A sharp turn back to the left', maneuver: 'sharp-left' },
+  { key: 'sharp-right', label: 'Sharp R', place: 'a sharp right', hint: 'A sharp turn back to the right', maneuver: 'sharp-right' },
+  { key: 'uturn-left', label: 'U-turn L', place: 'a u-turn to the left', hint: 'Doubling back to the left', maneuver: 'uturn-left' },
+  { key: 'uturn-right', label: 'U-turn R', place: 'a u-turn to the right', hint: 'Doubling back to the right', maneuver: 'uturn-right' },
+  { key: 'pin', label: 'Pin', place: 'a destination pin', hint: 'The destination marker', maneuver: 'arrive' },
 ];
 
-// The two ways of drawing it, so they can be compared on a real floor.
-//
-// "Scene" is 3D geometry inside the AR session, drawn by SceneKit in the same
-// pass as the camera image. "Overlay" is what the navigation screen ships: the
-// shape is projected to screen coordinates natively, sent to JS, and drawn in
-// SVG on top of the camera preview - which costs a bridge hop and a React render
-// before any of it appears, so it is always a frame or two behind the picture it
-// is lying on. That lag is what makes an overlay slide when the phone moves, and
-// it is the thing this comparison exists to show.
-const RENDERERS: { key: PreviewRenderer; label: string; hint: string }[] = [
-  { key: 'scene', label: 'Scene', hint: '3D geometry inside the AR session' },
-  { key: 'overlay', label: 'Overlay', hint: 'Drawn on top of the camera, as the route screen does' },
-];
 
 // A sandbox for the AR guidance: choose a component, tap the floor, and it
 // appears exactly where you tapped.
@@ -61,11 +78,10 @@ const RENDERERS: { key: PreviewRenderer; label: string; hint: string }[] = [
 // values, so this screen and AR Navigation are looking at the same drawing.
 export function ARPreviewScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const { T, F } = useSettings();
+  const { T, F, scaled } = useSettings();
 
   const [anchors, setAnchors] = useState<ProjectedAnchor[]>([]);
   const [component, setComponent] = useState<PreviewComponent>('path');
-  const [renderer, setRenderer] = useState<PreviewRenderer>('scene');
   const [clearToken, setClearToken] = useState(0);
   // How many things are down comes from the native side rather than from the
   // length of `anchors`, because under the scene renderer that list is empty by
@@ -94,7 +110,6 @@ export function ARPreviewScreen({ navigation }: Props) {
       style={StyleSheet.absoluteFill}
       previewMode
       previewComponent={component}
-      previewRenderer={renderer}
       previewClearToken={clearToken}
       onAnchorsUpdate={handleAnchorsUpdate}
       onPreviewState={handlePreviewState}
@@ -109,25 +124,54 @@ export function ARPreviewScreen({ navigation }: Props) {
       {/* Over the guidance and under the controls: it is telling the user the
           screen is not ready yet, so it must cover what is not ready without
           burying the way out. */}
-      <ARScanOverlay ready={state.ready} supported={isARGeospatialSupported} />
+      {/* `placed` as well as `ready`, because anything on the floor is proof the
+          session found it - and if it is ever asked again after that, it must
+          not be by covering up the thing the user is looking at. */}
+      <ARScanOverlay
+        ready={state.ready || state.placed > 0}
+        supported={isARGeospatialSupported}
+      />
 
-      <View style={[styles.card, { top: insets.top + SCREEN_MARGIN }]}>
-        <Text style={[styles.title, { fontSize: F.body }]}>
-          {isARGeospatialSupported ? `Tap the floor to place a ${chosen?.label.toLowerCase()}` : 'AR not available'}
-        </Text>
-        <Text style={[styles.body, { fontSize: F.tinySm }]}>
-          {!isARGeospatialSupported
-            ? 'This device has no ARKit support, so the guidance cannot be previewed here.'
-            : placed
-              ? `${chosen?.hint}. Walk around what you have placed to check that it stays put.`
-              : 'Tap the floor a couple of metres ahead of you.'}
-        </Text>
+      {/* The navigation screen's own header, over the band it belongs to.
+
+          It is here so the arrow and the shape can be judged together. They
+          are two halves of one instruction and they were only ever seen apart
+          - the arrow while walking a route, the band while standing on a
+          carpet - so nothing until now has shown whether the glyph for a sharp
+          left agrees with what a sharp left actually looks like on the floor. */}
+      <View style={[styles.banner, { top: insets.top + SCREEN_MARGIN }]}>
+        {isARGeospatialSupported && chosen && (
+          <AppIcon name={MANEUVER_ICONS[chosen.maneuver]} size={scaled(46)} color="#fff" />
+        )}
+        <View style={styles.bannerText}>
+          <Text style={[styles.bannerLabel, { fontSize: F.h2 }]} numberOfLines={1}>
+            {isARGeospatialSupported && chosen
+              ? MANEUVER_LABELS[chosen.maneuver]
+              : 'AR not available'}
+          </Text>
+          <Text style={[styles.bannerHint, { fontSize: F.sm }]} numberOfLines={2}>
+            {!isARGeospatialSupported
+              ? 'This device has no ARKit support, so the guidance cannot be previewed here.'
+              : placed
+                ? 'Walk around it to check that it stays put.'
+                : `Tap the floor a couple of metres ahead to place ${chosen?.place}.`}
+          </Text>
+        </View>
       </View>
 
       <View style={[styles.controls, { bottom: insets.bottom > 0 ? insets.bottom : 32 }]}>
         {/* Picker and actions on one row, so the thing being chosen and the
             things done with it are not in two different corners. */}
-        <View style={styles.picker}>
+        {/* Scrolls, because ten options will not fit across a phone and the
+            alternatives are worse: a second row steals more of the camera than
+            the controls already do, and a menu hides the choice behind a tap
+            on a screen whose whole point is trying things quickly. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.picker}
+          contentContainerStyle={styles.pickerRow}
+        >
           {COMPONENTS.map((entry, index) => (
             <React.Fragment key={entry.key}>
               {index > 0 && <View style={styles.divider} />}
@@ -150,36 +194,7 @@ export function ARPreviewScreen({ navigation }: Props) {
               </Pressable>
             </React.Fragment>
           ))}
-        </View>
-
-        {/* The two renderers, side by side on the same floor.
-            Which one is better is not really arguable in the abstract - it is a
-            question about how a moving phone feels, and the only honest way to
-            answer it is to put both on the same pavement and switch. */}
-        <View style={styles.picker}>
-          {RENDERERS.map((entry, index) => (
-            <React.Fragment key={entry.key}>
-              {index > 0 && <View style={styles.divider} />}
-              <Pressable
-                onPress={() => setRenderer(entry.key)}
-                style={[styles.segment, { minHeight: F.micro * 3 }]}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: entry.key === renderer }}
-                accessibilityLabel={`${entry.label}. ${entry.hint}`}
-              >
-                <Text
-                  style={[
-                    styles.segmentLabel,
-                    { fontSize: F.micro },
-                    entry.key === renderer && { color: T.green },
-                  ]}
-                >
-                  {entry.label}
-                </Text>
-              </Pressable>
-            </React.Fragment>
-          ))}
-        </View>
+        </ScrollView>
 
         <View style={styles.actions}>
           <Pressable
@@ -206,7 +221,8 @@ export function ARPreviewScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  card: {
+  // Matching the navigation screen's banner, because it is the same banner.
+  banner: {
     position: 'absolute',
     left: SCREEN_MARGIN,
     right: SCREEN_MARGIN,
@@ -214,9 +230,14 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.section,
     paddingVertical: 14,
     paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
   },
-  title: { color: '#fff', fontWeight: '700' },
-  body: { color: 'rgba(255,255,255,0.75)', marginTop: 4, lineHeight: 18 },
+  bannerText: { flex: 1 },
+  bannerLabel: { color: '#fff', fontWeight: '700' },
+  bannerHint: { color: 'rgba(255,255,255,0.75)', marginTop: 2, lineHeight: 18 },
+
   controls: {
     position: 'absolute',
     left: SCREEN_MARGIN,
@@ -230,7 +251,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderRadius: OVERLAY_PILL_HEIGHT / 2,
     overflow: 'hidden',
+    // A horizontal ScrollView stretches to its parent unless told not to, and
+    // the pill has to end where its content does or it reads as an empty bar.
+    flexGrow: 0,
   },
+  pickerRow: { flexDirection: 'row', alignItems: 'stretch' },
   segment: {
     justifyContent: 'center',
     paddingVertical: 9,

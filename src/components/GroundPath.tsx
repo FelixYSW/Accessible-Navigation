@@ -55,8 +55,16 @@ const WALKED_FAR_OPACITY = 0.32;
 // distance exactly. Kept shallow - the far end is the part carrying the
 // direction of the route, and fading it to a whisper would hide the very thing
 // the band exists to show.
-const NEAR_OPACITY = 0.95;
-const FAR_OPACITY = 0.55;
+//
+// Both ends are also well short of opaque, which is a safety decision rather
+// than a stylistic one. At 0.95 the band was a solid sheet of colour laid over the
+// pavement, which hid exactly what a walker most needs to see - the kerb, the
+// puddle, the broken slab, the thing this app exists to warn them about.
+// Guidance that obscures the ground it is guiding you across is worse than no
+// guidance. The rim and halo keep it legible instead, and they outline rather
+// than cover.
+const NEAR_OPACITY = 0.5;
+const FAR_OPACITY = 0.35;
 
 // A brightening that travels from the walker outwards, one pass every cycle.
 //

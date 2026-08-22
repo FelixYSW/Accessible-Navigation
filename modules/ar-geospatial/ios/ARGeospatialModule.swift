@@ -41,20 +41,10 @@ public class ARGeospatialModule: Module {
         view.setPreviewMode(preview)
       }
 
-      // Which component the next tap puts down: "path" or "pin".
+      // Which component the next tap puts down: a straight path, one of the
+      // seven turns, or the destination pin.
       Prop("previewComponent") { (view: ARGeospatialView, component: String) in
         view.setPreviewComponent(component)
-      }
-
-      // Which renderer draws the guidance: SceneKit geometry inside the AR
-      // scene, or the projected polygons the JS overlay draws on top of it.
-      //
-      // A prop rather than a decision baked in, because the whole point of the
-      // preview screen is to be able to put the two side by side - the trade
-      // between them is a real one and is easier judged on a pavement than in
-      // an argument.
-      Prop("previewRenderer") { (view: ARGeospatialView, renderer: String) in
-        view.setPreviewRenderer(renderer)
       }
 
       // Change this number to remove everything placed so far. A prop rather
