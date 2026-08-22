@@ -65,7 +65,7 @@ export function ScanPrompt({
         <View style={styles.icon}>
           <AppIcon
             name="scan-buildings"
-            size={scaled(40)}
+            size={scaled(56)}
             color={hopeless ? 'rgba(255,255,255,0.7)' : T.green}
           />
         </View>

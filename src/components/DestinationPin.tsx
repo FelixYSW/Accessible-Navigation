@@ -49,8 +49,19 @@ const CAMERA_FOV_DEG = 62;
 // Floor and ceiling on the drawn height, in pixels. The floor keeps it findable
 // at the far end of its range; the ceiling stops it filling the screen when the
 // walker is standing on top of it.
-const MIN_PIN_PX = 26;
-const MAX_PIN_FRACTION = 0.6;
+//
+// True perspective across the pin's whole range is a nineteen-fold change in
+// size, and both ends of that were wrong on a real walk: a marker four points
+// tall at sixty metres is not a marker, and one taller than the screen at arm's
+// length hides the doorway it is naming. The band below is about seven-fold,
+// which still reads as an object standing on the pavement and getting nearer.
+//
+// The ceiling is set so it only engages inside about a metre. A pin at waist
+// height - which is what this is meant to look like - wants around 320pt at one
+// metre on a modern iPhone, so everything from arrival distance outwards is
+// still drawn at its true size and the cap is only there for the last step.
+const MIN_PIN_PX = 44;
+const MAX_PIN_FRACTION = 0.42;
 
 // Past this the pin is not drawn at all. Not a rendering limit - an honesty
 // one. Geospatial anchors are placed against a pose whose error grows with

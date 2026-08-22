@@ -1,6 +1,7 @@
 import React from 'react';
 import { createNativeBottomTabNavigator } from '@bottom-tabs/react-navigation';
 import type { SFSymbol } from 'sf-symbols-typescript';
+import { symbolFor } from '../components/AppIcon';
 import { MapScreen } from '../screens/MapScreen';
 import { HazardDetectionScreen } from '../screens/HazardDetectionScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
@@ -16,12 +17,15 @@ export type TabParamList = {
 //
 // Not a preference: a native tab bar takes either an SF Symbol name or an image
 // file, and lucide renders as React components, so there is nothing to hand it.
-// These three are the closest system equivalents to the icons they replace -
-// the same navigation arrow, the same eye-in-brackets, the same gear - so the
-// change should be close to invisible.
+//
+// The Hazard Detection item is taken from the icon on that screen's own intro
+// card rather than named here, so the tab and the card it opens cannot drift
+// apart. It arrives unframed - see `symbolFor` for why the viewfinder is
+// dropped, and note that it could not be kept in any case, since a tab item
+// takes one symbol and the card's icon is two stacked.
 const TAB_ICONS: Record<keyof TabParamList, SFSymbol> = {
   Navigate: 'location.fill',
-  HazardDetection: 'dot.viewfinder',
+  HazardDetection: symbolFor('scan-path'),
   Settings: 'gearshape.fill',
 };
 

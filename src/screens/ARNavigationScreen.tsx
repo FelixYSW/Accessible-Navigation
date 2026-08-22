@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
@@ -72,9 +72,17 @@ const BANNER_TOP_GAP = 4;
 // anywhere between the lead distance and one spacing beyond it - at 2m spacing
 // that meant the first chevron could be three and a half metres off, which
 // reads as the run starting somewhere up the street rather than at your feet.
+//
+// The horizon is set by what a flat shape on the ground can still say, not by
+// how far ahead the route is known. Past about eight metres a chevron lying on
+// the pavement has foreshortened into a bar a few points deep - it is still
+// drawn, still fading, still costing a projection every frame, and it no longer
+// reads as an arrow pointing anywhere. The native side now grows the far ones
+// to hold that off (see GroundChevron.maxScale), and this is where that stops
+// being enough. The compass-drawn fallback has always stopped at five.
 const ANCHOR_SPACING_M = 1.2;
 const ANCHOR_LEAD_M = 0.8;
-const ANCHOR_HORIZON_M = 10;
+const ANCHOR_HORIZON_M = 8;
 
 // How far *behind* the walker's position along the route to start looking for
 // anchors, before filtering by true distance.
@@ -102,6 +110,30 @@ const ANCHOR_LOOKBACK_M = 2.5;
 // thing is to draw the real route and let them walk back to it.
 const MAX_PATH_OFFSET_M = 8;
 const OFFSET_DEADBAND_M = 1.5;
+
+// How much of each new reading the offset takes, and how big it has to get
+// before it is believed at all.
+//
+// These two exist because the offset is a *signed* quantity read off a noisy
+// fix, and that combination is dangerous in a way an unsigned one is not. A
+// pose good to five metres, measuring a walker who is genuinely three metres
+// left of the route line, will regularly report them three metres to the right
+// - and the correction then does not merely fail to help, it actively drives
+// the whole run across the road onto the opposite pavement. A wrong sign is
+// worse than no correction at all.
+//
+// Smoothing is the answer to the noise: the walker's true offset barely changes
+// along a leg, so averaging many fixes converges on it while the error, which
+// changes constantly, averages away. Deliberately slow - this has a whole leg
+// to settle and nothing to gain from tracking a single fix.
+//
+// The floor is the answer to the sign. Below it the reading is smaller than the
+// thing measuring it and its sign carries no information, so the run stays on
+// the route line - which is at least a place the walker can see is a
+// compromise, rather than a confident statement about the wrong pavement.
+const OFFSET_SMOOTHING = 0.12;
+const OFFSET_CONFIDENT_FRACTION = 0.6;
+const OFFSET_MIN_CONFIDENT_M = 1.2;
 
 // Anchors are matched by id on the native side, so one whose coordinate has
 // changed must change id too - otherwise the old anchor is judged still wanted
@@ -148,7 +180,20 @@ function offsetKeyFor(lateralMeters: number): number {
 // governs is how truly the run of them lands on the pavement, not whether it
 // stays put. Beyond these the placement is worth less than the compass-drawn
 // fallback, which at least starts from where the walker actually is.
-const TRUST_ANCHORS_ACCURACY_M = 5;
+//
+// Five metres was too loose, and field-walking a route showed why. Five metres
+// is wider than the road: at that accuracy the fix cannot tell which pavement
+// the walker is on, so the chevrons were being planted - confidently, and held
+// rock-steady by ARKit once down - out in the traffic or on the far side of the
+// street. Three is roughly what ARCore reports once VPS has actually localised
+// against Street View imagery, and above it the pose is really the phone's own
+// GPS wearing a geospatial label.
+//
+// This does mean the anchored run appears less often. That is the trade being
+// made deliberately: the compass fallback is drawn relative to where the walker
+// is standing, so it is vague about direction but never on the wrong pavement,
+// which is the better failure of the two.
+const TRUST_ANCHORS_ACCURACY_M = 3;
 const TRUST_ANCHORS_HEADING_DEG = 15;
 
 // And when to stop trusting it - deliberately worse than the figures above
@@ -160,7 +205,7 @@ const TRUST_ANCHORS_HEADING_DEG = 15;
 // the arrows jumping, which is the fault this whole change exists to remove. A
 // gap between switching on and switching off means the pose has to genuinely
 // deteriorate, not merely wobble, before the fallback takes over.
-const DISTRUST_ANCHORS_ACCURACY_M = 9;
+const DISTRUST_ANCHORS_ACCURACY_M = 6;
 const DISTRUST_ANCHORS_HEADING_DEG = 25;
 
 export function ARNavigationScreen({ route, navigation }: Props) {
@@ -342,9 +387,15 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     [anchorsTrusted, geospatial, position],
   );
 
-  // How far the walker is standing to one side of the drawn route, held steady
-  // so it only changes when they genuinely move across - not every time the
-  // fix wobbles by a few centimetres.
+  // How far the walker is standing to one side of the drawn route.
+  //
+  // Two values, not one. The ref is the running estimate and moves on every
+  // fix; the state is the quantised figure the anchors are actually built from
+  // and moves rarely, because every change to it re-plants the whole run. Kept
+  // in a ref rather than a second piece of state so that averaging a fix does
+  // not re-render the screen - at these update rates that would be a render per
+  // fix to change a number nothing is reading yet.
+  const smoothedOffset = useRef(0);
   const [pathOffset, setPathOffset] = useState(0);
 
   useEffect(() => {
@@ -355,7 +406,22 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
     // Past the cap this has stopped meaning "the other pavement" and started
     // meaning "not on this road", and the honest answer then is the real route.
-    const target = Math.abs(measured) <= MAX_PATH_OFFSET_M ? measured : 0;
+    const sample = Math.abs(measured) <= MAX_PATH_OFFSET_M ? measured : 0;
+
+    smoothedOffset.current += (sample - smoothedOffset.current) * OFFSET_SMOOTHING;
+
+    // How big the estimate has to be before its sign is worth acting on. Scaled
+    // by what the pose says about itself, so a metre of offset is believed on a
+    // VPS fix good to half a metre and ignored on one that is guessing - with a
+    // floor under it, because a fix that reports implausibly good accuracy
+    // should not be able to switch the check off.
+    const uncertainty = anchorsTrusted && geospatial ? geospatial.horizontalAccuracy : 0;
+    const confident = Math.max(
+      OFFSET_MIN_CONFIDENT_M,
+      uncertainty * OFFSET_CONFIDENT_FRACTION,
+    );
+    const target =
+      Math.abs(smoothedOffset.current) >= confident ? smoothedOffset.current : 0;
 
     setPathOffset((current) => {
       if (Math.abs(target - current) <= OFFSET_DEADBAND_M) return current;
@@ -364,7 +430,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       // occasions it is warranted.
       return Math.round(target * 2) / 2;
     });
-  }, [walkingRoute.coordinates, anchorOrigin]);
+  }, [walkingRoute.coordinates, anchorOrigin, anchorsTrusted, geospatial]);
 
   // The route points to anchor, as a fixed lattice measured from the start of
   // the route rather than from the walker.

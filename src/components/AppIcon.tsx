@@ -88,14 +88,37 @@ const ICONS = {
   // centred and scaled into it, so they are used at the one size that suits
   // them, on a card, and not at 15px in a pill.
   'scan-buildings': { sf: 'viewfinder', inner: 'building.2.fill', lucide: Radar },
+  // A curving road receding into the distance, which is nearer to what the card
+  // is asking for than the abstract S-curve it replaced: that one was a route
+  // *between two points*, drawn with a dot at each end, and this screen has no
+  // route and no destination - it is about the strip of ground immediately
+  // ahead. The lanes also give the shape some perspective, so it reads as
+  // something you are standing on rather than a line on a map.
+  //
+  // The lucide fallback stays ScanEye. It stands in for the whole layered icon
+  // on Android rather than for the inner glyph, and what that icon means there
+  // is "scanning", which has not changed.
   'scan-path': {
     sf: 'viewfinder',
-    inner: 'point.bottomleft.forward.to.point.topright.scurvepath.fill',
+    inner: 'road.lanes.curved.right',
     lucide: ScanEye,
   },
 } satisfies Record<string, { sf: SFSymbol; inner?: SFSymbol; lucide: LucideIcon }>;
 
 export type AppIconName = keyof typeof ICONS;
+
+// The single SF Symbol behind an icon, for the places that cannot take a React
+// component - which in practice means the native tab bar, whose item takes one
+// symbol name or one image and never a stack of either.
+//
+// Layered icons answer with their inner glyph rather than their frame. The
+// frame is the part that says "the camera is looking at this"; the inner glyph
+// is the part that says what. A tab item is not a camera and has no room for
+// brackets around a 25pt mark, so it wants the subject on its own.
+export function symbolFor(name: AppIconName): SFSymbol {
+  const entry: { sf: SFSymbol; inner?: SFSymbol } = ICONS[name];
+  return entry.inner ?? entry.sf;
+}
 
 // Roughly the visual weight of a lucide icon at its default 2px stroke. SF's
 // `regular` is noticeably lighter beside the rest of this app's chrome.
@@ -106,9 +129,16 @@ const DEFAULT_WEIGHT: SymbolWeight = 'medium';
 const LUCIDE_STROKE = 2;
 
 // How much of the frame the inner symbol fills, for the layered icons.
-// The viewfinder's clear area is a little under half its width, and an inner
-// glyph any larger starts touching the corner brackets.
-const INNER_FRACTION = 0.42;
+//
+// The earlier 0.42 was measured against the viewfinder's *clear square* - the
+// gap between opposing brackets - which is the wrong box to fit into. The
+// brackets only occupy the four corners, so a centred glyph grows towards the
+// empty midpoints of the edges and has room well past that square before its
+// own corners reach a bracket elbow. At 0.55 it fills a little over half the
+// frame's width and around half again as much area as it did, which is what
+// makes the frame read as something wrapped around a subject rather than a
+// large box with a small mark in it.
+const INNER_FRACTION = 0.55;
 
 interface AppIconProps {
   name: AppIconName;

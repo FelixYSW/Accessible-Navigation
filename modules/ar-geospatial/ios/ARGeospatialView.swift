@@ -79,6 +79,30 @@ enum GroundChevron {
   static let outline: [(across: Float, ahead: Float)] = [
     (0, 0.55), (0.65, -0.2), (0.65, -0.55), (0, 0.2), (-0.65, -0.55), (-0.65, -0.2),
   ]
+
+  /// How the footprint above is scaled with distance, and the range that scale
+  /// is allowed to move in.
+  ///
+  /// A deliberate departure from true perspective, because true perspective is
+  /// unusable here. A flat shape on the ground shrinks twice over as it recedes:
+  /// its width falls off as 1/d like anything else, but its *depth* falls off as
+  /// 1/d squared, because both of its edges are racing towards the horizon and
+  /// the far one gets there first. At the sizes above that is a chevron about
+  /// 135pt deep at two metres and four at ten - a thirty-fold range, which is
+  /// exactly the "huge up close, invisible far away" it looks like.
+  ///
+  /// Growing the footprint with distance flattens that range. It cannot remove
+  /// it - nothing lying on the ground can be made to hold its depth at range -
+  /// but it turns thirty-fold into roughly six, which is the difference between
+  /// a run that recedes and one whose far half may as well not be drawn.
+  ///
+  /// At the reference distance the chevron is its true 1.3m by 1.1m. The floor
+  /// is what stops the nearest one filling the lower half of the screen; the
+  /// ceiling is what stops the far ones growing into each other faster than the
+  /// spacing pulls them apart.
+  static let referenceDistanceM: Float = 3.5
+  static let minScale: Float = 0.6
+  static let maxScale: Float = 2.0
 }
 
 /// An ARKit camera preview whose frames are also fed to ARCore's Geospatial
@@ -691,8 +715,18 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate {
       var outline: [Double] = []
       var wholeShapeInFront = true
 
+      // One scale for the whole shape, taken from the distance to its centre
+      // rather than per corner - scaling each corner by its own distance would
+      // stretch the chevron along its axis and turn it into a different shape
+      // at every range.
+      let scale = min(
+        GroundChevron.maxScale,
+        max(GroundChevron.minScale, centre.distance / GroundChevron.referenceDistanceM)
+      )
+
       for corner in GroundChevron.outline {
-        let world = position + right * corner.across + forward * corner.ahead
+        let world =
+          position + right * (corner.across * scale) + forward * (corner.ahead * scale)
         let projectedCorner = screenPoint(of: world, arFrame: arFrame, viewport: viewport)
         // One corner behind the lens takes the whole chevron with it: a partly
         // projected polygon is not a smaller chevron, it is a torn one.
