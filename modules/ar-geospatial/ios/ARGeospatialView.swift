@@ -289,16 +289,22 @@ enum GroundPath {
   /// broken slab, the thing this app exists to warn them about. Guidance that
   /// obscures the ground it is guiding you across is worse than no guidance.
   ///
-  /// It went 0.95, then 0.5, then 0.32, and now this. Each step was the same
-  /// discovery made again: whatever the fill is doing, the outline was doing it
-  /// better. So the fill has stopped trying. It is a tint that says which chevron
-  /// is live and which is behind you, and the outline does the rest.
-  static let nearOpacity: CGFloat = 0.16
-  static let farOpacity: CGFloat = 0.11
+  /// It went 0.95, then 0.5, then 0.32, then 0.16 - and 0.16 was chasing the
+  /// wrong thing. The fill looked washed out not because it was too strong but
+  /// because it was being composited over the white rim underneath it rather
+  /// than over the pavement; see the note in `chevronNode`. Lowering it made it
+  /// whiter, which is the opposite of what was wanted and should have been the
+  /// clue.
+  ///
+  /// With the rim drawn as a ring, the green now lands on the ground and reads as
+  /// green, so it can afford to be seen. Still a tint - you can read the paving
+  /// through it - and the outline still carries the shape.
+  static let nearOpacity: CGFloat = 0.3
+  static let farOpacity: CGFloat = 0.2
 
   /// Ground already covered.
-  static let walkedNearOpacity: CGFloat = 0.18
-  static let walkedFarOpacity: CGFloat = 0.12
+  static let walkedNearOpacity: CGFloat = 0.3
+  static let walkedFarOpacity: CGFloat = 0.2
 
   /// How far the floor estimate has to move before the 3D band is rebuilt on
   /// it. A centimetre is below what any of this resolves and well below what a
@@ -1375,6 +1381,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
           position: standing,
           index: request.id,
           kind: request.kind,
+          headM: GroundPath.pinHeightM,
           arFrame: arFrame,
           viewport: viewport
         )
@@ -1977,16 +1984,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     let half = GroundPath.chevronArmM / 2
 
     guard
-      let halo = strip(
-        along: arms,
-        halfWidth: half + GroundPath.haloWidthM,
-        lift: GroundPath.bandLiftM
-      ),
-      let rim = strip(
-        along: arms,
-        halfWidth: half + GroundPath.rimWidthM,
-        lift: GroundPath.bandLiftM + GroundPath.layerLiftM
-      ),
       let fill = strip(
         along: arms,
         halfWidth: half,
@@ -1994,25 +1991,50 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       )
     else { return nil }
 
-    halo.geometry?.materials = [
-      flatMaterial(
-        UIColor(
-          white: 0,
-          alpha: walked ? GroundPath.walkedHaloOpacity : GroundPath.haloOpacity
-        )
-      )
-    ]
-    halo.renderingOrder = -14
+    let node = SCNNode()
 
-    rim.geometry?.materials = [
-      flatMaterial(
-        UIColor(
-          white: 1,
-          alpha: walked ? GroundPath.walkedRimOpacity : GroundPath.rimOpacity
-        )
-      )
-    ]
-    rim.renderingOrder = -13
+    // The halo and the rim are drawn as *rings* - a strip down each side with
+    // nothing between them - rather than as wider strips stacked under the fill.
+    //
+    // This is the whole reason the fill came out white. Stacked, the rim was a
+    // solid white strip running the full width of the mark, and the green was
+    // composited on top of *that* instead of on top of the pavement. A tint over
+    // opaque white is a pale tint of white, so the more transparent the green was
+    // made the whiter it went - which is the opposite of what lowering an alpha
+    // is supposed to do, and should have been the clue that the fill was never
+    // the problem.
+    //
+    // Rings cost one more strip per layer and nothing else. The mark is the same
+    // width it was; what changed is that the middle of it is now empty.
+    let haloColour = UIColor(
+      white: 0,
+      alpha: walked ? GroundPath.walkedHaloOpacity : GroundPath.haloOpacity
+    )
+    for edge in outlineStrips(
+      along: arms,
+      inner: half + GroundPath.rimWidthM,
+      outer: half + GroundPath.haloWidthM,
+      lift: GroundPath.bandLiftM
+    ) {
+      edge.geometry?.materials = [flatMaterial(haloColour)]
+      edge.renderingOrder = -14
+      node.addChildNode(edge)
+    }
+
+    let rimColour = UIColor(
+      white: 1,
+      alpha: walked ? GroundPath.walkedRimOpacity : GroundPath.rimOpacity
+    )
+    for edge in outlineStrips(
+      along: arms,
+      inner: half,
+      outer: half + GroundPath.rimWidthM,
+      lift: GroundPath.bandLiftM + GroundPath.layerLiftM
+    ) {
+      edge.geometry?.materials = [flatMaterial(rimColour)]
+      edge.renderingOrder = -13
+      node.addChildNode(edge)
+    }
 
     // The distance fade is now a flat colour per chevron rather than a gradient
     // painted along the run, which is both simpler and more correct. A chevron is
@@ -2036,15 +2058,12 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
     fill.geometry?.materials = [flatMaterial(colour)]
     fill.renderingOrder = -12
-
-    let node = SCNNode()
-    node.addChildNode(halo)
-    node.addChildNode(rim)
     node.addChildNode(fill)
+
     return node
   }
 
-  /// One sweep of a centreline at a given half-width, as a triangle strip.
+  /// One sweep of a centreline at a given half-width, filled edge to edge.
   private func strip(along points: [PathPoint], halfWidth: Float, lift: Float) -> SCNNode? {
     var vertices: [SCNVector3] = []
     let frames = bandFrames(points, halfWidth: halfWidth)
@@ -2059,10 +2078,56 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       vertices.append(SCNVector3(right.x, right.y, right.z))
     }
 
+    return stripNode(from: vertices)
+  }
+
+  /// The two edges of a sweep, as a pair of strips with nothing between them.
+  ///
+  /// What an outline actually is, as against what stacking a wider strip
+  /// underneath a narrower one approximates. The difference only shows when the
+  /// thing on top is transparent - and the thing on top here is a tint over a
+  /// pavement, so it shows badly.
+  private func outlineStrips(
+    along points: [PathPoint],
+    inner: Float,
+    outer: Float,
+    lift: Float
+  ) -> [SCNNode] {
+    // One frame set at unit width serves both edges. The mitre reach depends on
+    // the angle at each vertex and not on how far out the edge is, so the unit
+    // offset scales to any width - which also guarantees the rim and the halo
+    // mitre identically and stay parallel round the point of the V.
+    let frames = bandFrames(points, halfWidth: 1)
+
+    var left: [SCNVector3] = []
+    var right: [SCNVector3] = []
+
+    for (i, point) in points.enumerated() {
+      guard let frame = frames[i] else { continue }
+
+      let raised = point.position + simd_float3(0, lift, 0)
+      let close = frame.offset * inner
+      let away = frame.offset * outer
+
+      let leftOuter = raised - away
+      let leftInner = raised - close
+      let rightInner = raised + close
+      let rightOuter = raised + away
+
+      left.append(SCNVector3(leftOuter.x, leftOuter.y, leftOuter.z))
+      left.append(SCNVector3(leftInner.x, leftInner.y, leftInner.z))
+      right.append(SCNVector3(rightInner.x, rightInner.y, rightInner.z))
+      right.append(SCNVector3(rightOuter.x, rightOuter.y, rightOuter.z))
+    }
+
+    return [left, right].compactMap { stripNode(from: $0) }
+  }
+
+  /// A run of paired vertices as one triangle strip, which is what a swept line
+  /// is: every new pair closes two more triangles against the pair before it.
+  private func stripNode(from vertices: [SCNVector3]) -> SCNNode? {
     guard vertices.count >= 4 else { return nil }
 
-    // A triangle strip, which is what a swept line is: every new pair of vertices
-    // closes two more triangles against the pair before it.
     let element = SCNGeometryElement(
       indices: (0..<vertices.count).map { Int32($0) },
       primitiveType: .triangleStrip
@@ -2262,6 +2327,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
           // navigation screen uses, so the JS side treats it the same way.
           index: -1 - index,
           kind: run.kind,
+          headM: GroundPath.pinHeightM,
           arFrame: arFrame,
           viewport: viewport
         )
@@ -2370,12 +2436,13 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     position: simd_float3,
     index: Int,
     kind: String,
+    headM: Float = 0,
     arFrame: ARFrame,
     viewport: CGSize
   ) -> [String: Any] {
     let centre = screenPoint(of: position, arFrame: arFrame, viewport: viewport)
 
-    return [
+    var projected: [String: Any] = [
       "index": index,
       "kind": kind,
       "x": centre.point.x,
@@ -2383,6 +2450,30 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       "distance": Double(centre.distance),
       "visible": centre.inFront,
     ]
+
+    // Where the top of the thing standing here lands on screen - measured,
+    // rather than worked out a second time on the JS side.
+    //
+    // The label used to derive this from an assumed 62-degree field of view,
+    // and it was wrong by about a factor of two: the name came out halfway down
+    // the pin instead of above it. ARSCNView fills its view with the camera
+    // feed, which crops it, so the field of view actually on screen is much
+    // narrower than the sensor's - and no fixed constant describes it, because
+    // it depends on the view's own aspect ratio against the camera's.
+    //
+    // ARKit's projection already knows the real intrinsics and the real
+    // viewport. Asking it for a second point is two lines and cannot drift out
+    // of step with the renderer the way a duplicated guess did.
+    if headM > 0 {
+      let head = screenPoint(
+        of: position + simd_float3(0, headM, 0),
+        arFrame: arFrame,
+        viewport: viewport
+      )
+      if head.inFront { projected["headY"] = head.point.y }
+    }
+
+    return projected
   }
 
   private func screenPoint(

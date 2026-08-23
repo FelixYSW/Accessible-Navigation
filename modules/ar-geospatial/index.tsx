@@ -67,6 +67,15 @@ export interface ProjectedAnchor {
   distance: number;
   /** False when it is behind the camera. */
   visible: boolean;
+  /** Where the top of the thing standing at this anchor lands on screen.
+   *
+   *  Sent for the destination, so its name can be hung above the pin without
+   *  the JS side having to guess the camera's field of view - which it did, and
+   *  got wrong by about a factor of two, because the preview is cropped to fill
+   *  the view and the visible field is narrower than the sensor's.
+   *
+   *  Absent when the top is behind the lens. */
+  headY?: number;
 }
 
 /** One detection, straight off the model. Deliberately not `HazardDetection`

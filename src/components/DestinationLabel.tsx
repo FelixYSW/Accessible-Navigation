@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, useWindowDimensions } from 'react-native';
+import { StyleSheet } from 'react-native';
 import Svg, { Text as SvgText } from 'react-native-svg';
 import type { ProjectedAnchor } from '../../modules/ar-geospatial';
 
@@ -18,30 +18,27 @@ import type { ProjectedAnchor } from '../../modules/ar-geospatial';
 // object and belongs in the world; its name is interface and belongs on the
 // glass, at a size that does not change.
 
-// How tall the pin stands in the world, in metres. Must match
-// GroundPath.pinHeightM on the native side - this is only used to work out how
-// far above the ground point the label has to sit to clear it.
-const PIN_HEIGHT_M = 1.0;
-
-// The camera's horizontal field of view, matching the assumption in
-// GroundArrows. The projected x/y come from ARKit's real intrinsics, but this
-// height is worked out here, so it is the one assumed part.
-const CAMERA_FOV_DEG = 62;
-
-// The range the native pin is drawn over, matching GroundPath.pinFarCutM and
-// GroundPath.pinNearCutM. Outside it there is no pin to label.
-//
-// The far end is an honesty limit rather than a rendering one: a pin placed
-// 200m off is confidently pointing through three buildings. The near end is a
-// safety one: real perspective on a waist-high object at arm's length is a slab
-// across the frame, hiding the pavement at the moment the walker steps onto it.
+// Past this the pin is not drawn, matching GroundPath.pinFarCutM. An honesty
+// limit rather than a rendering one: a pin placed 200m off is confidently
+// pointing through three buildings.
 const MAX_VISIBLE_DISTANCE_M = 60;
-const PIN_NEAR_CUT_M = 1.5;
 
-// How far above the pin's head the label sits, and how far above the ground
-// point it sits once the pin has been cut and there is no head to clear.
-const LABEL_GAP_PX = 10;
-const LABEL_GAP_NO_PIN_PX = 40;
+// How far above the pin's head the name sits.
+const LABEL_GAP_PX = 14;
+
+// How far above the ground point it sits when the renderer could not tell us
+// where the head is, which happens only when the head is behind the lens.
+const LABEL_GAP_NO_HEAD_PX = 40;
+
+// The highest the label is allowed to go.
+//
+// Walk close enough and the pin's head leaves the top of the frame, taking the
+// label with it - so the name disappears at exactly the distance where the
+// walker is deciding which door is theirs. Held here instead, which is roughly
+// clear of the instruction banner. A rough figure is defensible because this
+// only binds in the last stride or two, and the alternative to a slightly
+// misplaced label is no label.
+const MIN_LABEL_Y = 180;
 
 const LABEL_SIZE = 15;
 
@@ -51,26 +48,22 @@ interface DestinationLabelProps {
 }
 
 export function DestinationLabel({ anchors, label }: DestinationLabelProps) {
-  const { width } = useWindowDimensions();
   const pin = anchors.find((anchor) => anchor.kind === 'destination' && anchor.visible);
   if (!pin || pin.distance > MAX_VISIBLE_DISTANCE_M) return null;
 
-  // How tall the pin appears from here, which is the same sum the renderer is
-  // doing in 3D: an object PIN_HEIGHT_M tall at this distance covers
-  // `PIN_HEIGHT_M * focal / distance` pixels. Deriving the focal length from
-  // the real viewport keeps it right on screens no constant was fitted to.
+  // Where the top of the pin actually lands, projected by the renderer through
+  // the camera's real intrinsics.
   //
-  // No floor and no ceiling on it any more. The overlay needed both because it
-  // was drawing the pin itself and true perspective across its whole range is a
-  // nineteen-fold change in size; here the pin is drawn by the renderer at
-  // whatever size perspective says, and this only has to agree with it.
-  const focal = width / 2 / Math.tan((CAMERA_FOV_DEG * Math.PI) / 360);
-  const pinPixels = (PIN_HEIGHT_M * focal) / pin.distance;
-
+  // This used to be worked out here, from the pin's known height and an assumed
+  // 62-degree field of view - and it was wrong by roughly a factor of two, which
+  // put the name across the middle of the pin rather than above it. The preview
+  // is cropped to fill the view, so the field actually on screen is narrower
+  // than the sensor's and no constant describes it. Asking the thing that did
+  // the projection is both correct and impossible to get out of step with.
   const y =
-    pin.distance <= PIN_NEAR_CUT_M
-      ? pin.y - LABEL_GAP_NO_PIN_PX
-      : pin.y - pinPixels - LABEL_GAP_PX;
+    pin.headY !== undefined
+      ? Math.max(MIN_LABEL_Y, pin.headY - LABEL_GAP_PX)
+      : Math.max(MIN_LABEL_Y, pin.y - LABEL_GAP_NO_HEAD_PX);
 
   return (
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">

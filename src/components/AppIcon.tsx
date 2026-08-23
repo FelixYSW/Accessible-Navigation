@@ -9,7 +9,7 @@ import {
   ChevronDown,
   ChevronUp,
   Compass,
-  Construction,
+  BrickWall,
   CornerLeftDown,
   CornerRightDown,
   CornerUpLeft,
@@ -47,27 +47,63 @@ const ICONS = {
   'chevron-down': { sf: 'chevron.down', lucide: ChevronDown },
   'chevron-up': { sf: 'chevron.up', lucide: ChevronUp },
   compass: { sf: 'location.circle', lucide: Compass },
-  // A barrier across a pedestrian's path - the closest thing in the catalogue
-  // to what this class actually means.
+  // A wall across the way: the pathway-obstruction class.
   //
-  // A traffic cone was the literal translation of the lucide barrier and the
-  // wrong idea: the class is trained on COCO - people, bicycles, parked cars,
-  // benches, bins, dogs - so a cone depicts one uncommon member of it and
-  // implies roadworks for all the rest.
+  // The hard part of this glyph is that the class has no single object in it.
+  // It is trained on COCO - people, bicycles, parked cars, benches, bins, dogs -
+  // so anything depicting a *thing* names one uncommon member and misdescribes
+  // all the rest. A traffic cone said roadworks. A closed pedestrian gate said
+  // gate, and a gate is something you open.
   //
-  // The one thing to watch is size. This is the most detailed of the four
-  // hazard glyphs and it is drawn at 13px on a detection box, where a gate and
-  // a figure have to resolve into something recognisable. It is the right
-  // meaning; if it does not hold together that small, `nosign` is the legible
-  // fallback that says less.
-  construction: { sf: 'pedestrian.gate.closed', lucide: Construction },
+  // A wall says one thing and nothing else: you are not getting through here.
+  // It names no object and implies no cause, which is exactly right for a class
+  // whose members have nothing in common except being in the way.
+  //
+  // It also solves the size problem rather than living with it. These are drawn
+  // at 13px on a detection box, and this used to be the most detailed of the
+  // four - a gate and a figure, at a size where neither resolves. A rectangle
+  // with a few courses in it is now the simplest.
+  //
+  // Lucide-only for the reason `map-pin` is: SF Symbols has no wall, and the
+  // nearest thing in its catalogue is the gate this replaces.
+  blocked: { sf: 'pedestrian.gate.closed', lucide: BrickWall, lucideOnly: true },
   'corner-left-down': { sf: 'arrow.turn.left.down', lucide: CornerLeftDown },
   'corner-right-down': { sf: 'arrow.turn.right.down', lucide: CornerRightDown },
   'corner-up-left': { sf: 'arrow.turn.up.left', lucide: CornerUpLeft },
   'corner-up-right': { sf: 'arrow.turn.up.right', lucide: CornerUpRight },
   crosshair: { sf: 'scope', lucide: Crosshair },
-  droplets: { sf: 'humidity', lucide: Droplets },
-  'map-pin': { sf: 'mappin', lucide: MapPin },
+  // Water lying on the ground: the slippery-surface class.
+  //
+  // Lucide-only, like `map-pin` and `blocked`, and for the same kind of reason.
+  // SF `humidity` is one droplet with a level marked inside it - a *reading*,
+  // the glyph a weather app puts next to a percentage. That is a measurement of
+  // the air, not a warning about the pavement. The lucide pair are two loose
+  // droplets with nothing measuring them, which is what water on a surface looks
+  // like.
+  //
+  // Two, not three, in case that matters later - lucide has no three-droplet
+  // glyph.
+  droplets: { sf: 'humidity', lucide: Droplets, lucideOnly: true },
+  // The destination, in the directions banner once the route is arriving or
+  // arrived.
+  //
+  // The one icon in the set that deliberately does not use its SF symbol.
+  //
+  // SF Symbols has no teardrop map pin. Its whole `mappin` family is a push-pin
+  // seen side-on - a ball on a straight spike - which is a different object that
+  // happens to share a name, and at banner size it reads closer to a lollipop
+  // than to a place. `mappin.and.ellipse` adds a ring under the spike and is what
+  // Apple Maps uses, but it is still a push-pin.
+  //
+  // Lucide's is the teardrop with a hole through it, which is exactly the shape
+  // the 3D pin in the AR view is modelled on. The banner and the thing standing
+  // on the pavement in front of the walker are the same instruction seen twice,
+  // and they should be the same shape - that matters more here than following the
+  // platform's own icon set.
+  //
+  // `sf` is kept as the nearest equivalent, unused for drawing but there so the
+  // entry stays the same shape as every other one.
+  'map-pin': { sf: 'mappin.and.ellipse', lucide: MapPin, lucideOnly: true },
   rabbit: { sf: 'hare', lucide: Rabbit },
   radar: { sf: 'dot.radiowaves.forward', lucide: Radar },
   'scan-eye': { sf: 'dot.viewfinder', lucide: ScanEye },
@@ -115,7 +151,10 @@ const ICONS = {
     inner: 'road.lanes.curved.right',
     lucide: ScanEye,
   },
-} satisfies Record<string, { sf: SFSymbol; inner?: SFSymbol; lucide: LucideIcon }>;
+} satisfies Record<
+  string,
+  { sf: SFSymbol; inner?: SFSymbol; lucide: LucideIcon; lucideOnly?: boolean }
+>;
 
 export type AppIconName = keyof typeof ICONS;
 
@@ -127,6 +166,16 @@ export type AppIconName = keyof typeof ICONS;
 // frame is the part that says "the camera is looking at this"; the inner glyph
 // is the part that says what. A tab item is not a camera and has no room for
 // brackets around a 25pt mark, so it wants the subject on its own.
+// The SF name behind an icon, for the places that need a *name* rather than a
+// drawing - the tab bar, which takes symbols by string.
+//
+// Deliberately ignores `lucideOnly`, because there is nothing else it could
+// return: a caller that wants a symbol name cannot be handed a React component.
+// So an icon marked lucideOnly will silently come back as the SF symbol it does
+// not use if it is ever asked for this way. None of the three currently marked
+// are - the tab bar asks only for `scan-path` - but that is a fact about today,
+// not a guarantee. Anything added to the tab bar should be checked against the
+// flag first.
 export function symbolFor(name: AppIconName): SFSymbol {
   const entry: { sf: SFSymbol; inner?: SFSymbol } = ICONS[name];
   return entry.inner ?? entry.sf;
@@ -160,9 +209,19 @@ interface AppIconProps {
 }
 
 export function AppIcon({ name, size, color, weight = DEFAULT_WEIGHT }: AppIconProps) {
-  const entry: { sf: SFSymbol; inner?: SFSymbol; lucide: LucideIcon } = ICONS[name];
+  const entry: {
+    sf: SFSymbol;
+    inner?: SFSymbol;
+    lucide: LucideIcon;
+    lucideOnly?: boolean;
+  } = ICONS[name];
   const { sf, lucide: Fallback } = entry;
   const fallback = <Fallback size={size} color={color} strokeWidth={LUCIDE_STROKE} />;
+
+  // A few icons have no SF equivalent worth using - see `map-pin`. They take the
+  // lucide drawing on every platform rather than only where the symbol is
+  // missing, which is the difference between a fallback and a choice.
+  if (entry.lucideOnly) return fallback;
 
   // Layered icons are iOS-only rather than per-view. `SymbolView` renders its
   // own fallback when a platform has no symbol, so stacking two of them
