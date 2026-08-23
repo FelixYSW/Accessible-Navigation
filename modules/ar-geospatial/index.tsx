@@ -32,7 +32,8 @@ export interface GeoAnchor {
   id: number;
   /** `route` points are threaded together into the ground band and chained to work
    *  out which way the run faces. `destination` is a single marker at the end
-   *  of the journey, drawn as an upright pin and deliberately kept out of that
+   *  of the journey, drawn as an upright pin in the scene and deliberately kept
+   *  out of that
    *  chain. Defaults to `route`. */
   kind?: 'route' | 'destination';
   latitude: number;
@@ -42,12 +43,15 @@ export interface GeoAnchor {
 /** One anchor the AR session drew this frame, projected to where it appears on
  *  screen.
  *
- *  Points only, and deliberately. The guidance band does not come across this
- *  bridge at all: it is geometry inside the AR scene, rasterised in the same
- *  pass as the camera image, which is what lets it hold still and lets a wall
- *  hide it. What is sent here is what is genuinely a sprite - something that
- *  faces the viewer from wherever they happen to stand, and so has nothing to
- *  gain from being modelled in three dimensions. */
+ *  Points only, and deliberately. Nothing that is drawn *as* something comes
+ *  across this bridge any more - the band and the destination pin are both
+ *  geometry inside the AR scene, rasterised in the same pass as the camera
+ *  image, which is what lets them hold still and lets a wall hide them.
+ *
+ *  What is sent here is where to hang the things that must not obey
+ *  perspective: the destination's name, which has to stay readable at sixty
+ *  metres, and the control anchors on the test screen, whose whole job is to
+ *  be a dot at a known place. */
 export interface ProjectedAnchor {
   /** The `id` it was requested under. */
   index: number;
@@ -139,6 +143,15 @@ export interface ARGeospatialViewProps extends ViewProps {
   /** Plants three plain ARKit anchors ahead of the camera, to judge the
    *  tracking itself against. Only the Geospatial test screen wants them. */
   showControlAnchors?: boolean;
+
+  /** How wide to draw the chevrons, in metres. Clamped to 3-14 natively.
+   *
+   *  Not a style setting. It is how far apart the two answers to "where is the
+   *  route" currently are - what the map says, and where the walker is standing
+   *  - so a chevron narrower than that gap would be claiming a precision
+   *  nothing supports. Wide means "somewhere along here", which on a road whose
+   *  pavements OSM has not mapped is the truth. */
+  guidanceWidthM?: number;
 
   /** Tap the floor to place components, with no route and no Geospatial
    *  session. Works indoors, which is what it is for. */

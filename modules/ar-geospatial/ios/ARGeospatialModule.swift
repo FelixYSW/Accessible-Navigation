@@ -35,6 +35,13 @@ public class ARGeospatialModule: Module {
         view.setShowControlAnchors(show)
       }
 
+      // How wide the chevrons are drawn. Worked out in JS because the things
+      // it depends on live there - the route line, the walker's offset from
+      // it, and what the pose says about its own accuracy.
+      Prop("guidanceWidthM") { (view: ARGeospatialView, width: Double) in
+        view.setGuidanceWidth(Float(width))
+      }
+
       // Tap-to-place preview. Runs on ARKit alone, so it works indoors and
       // anywhere else the Geospatial API cannot localise.
       Prop("previewMode") { (view: ARGeospatialView, preview: Bool) in

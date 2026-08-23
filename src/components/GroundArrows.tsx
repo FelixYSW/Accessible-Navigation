@@ -1,17 +1,17 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, useWindowDimensions } from 'react-native';
-import Svg, { Defs, LinearGradient, Polygon, Stop } from 'react-native-svg';
+import Svg, { Polyline } from 'react-native-svg';
 
 // The Live View treatment without an AR session behind it: one continuous band
 // painted along the way ahead, leading away from the walker and curving into
 // the turn as one comes up.
 //
-// It draws the same shape as the anchored band and differs entirely in where
-// the shape comes from. That one is geometry inside the AR scene, built on
-// points anchored to real coordinates, so it sits on one patch of ground and
-// stays on it. This one is computed from a compass bearing, a guessed camera
-// height and a measured tilt, which puts it in roughly the right direction and
-// lets it swim as the magnetometer wanders.
+// It draws the same shape as the anchored guidance and differs entirely in
+// where the shape comes from. That one is geometry inside the AR scene, built
+// on points anchored to real coordinates, so it sits on one patch of ground
+// and stays on it. This one is computed from a compass bearing, a guessed
+// camera height and a measured tilt, which puts it in roughly the right
+// direction and lets it swim as the magnetometer wanders.
 //
 // Drawing the same shape in both is the point. The two treatments swap over
 // mid-walk as localisation comes and goes, and a change of *form* at that moment
@@ -42,18 +42,43 @@ const CAMERA_FOV_DEG = 62;
 // held when walking with it.
 export const DEFAULT_CAMERA_PITCH_DEG = 30;
 
-// How far ahead the band is drawn, in metres. Kept short: the ground compresses
-// hard towards the horizon, and past six metres a band lying on it has narrowed
-// to a few points of screen - correct, and useless. A little shorter than the
-// anchored band's eight metres, and deliberately: this one is aimed by a
-// compass, and the further it reaches the wider a bearing error spreads it.
-const PATH_LENGTH_M = 6.0;
+// How far ahead the chevrons are drawn, in metres.
+//
+// This used to be six, because past that a band ninety centimetres across had
+// narrowed to a few points of screen. A chevron eight metres across is still
+// legible at eighteen.
+//
+// Reaching further is only defensible *because* they are wide. This path is
+// aimed by a magnetometer, and a ten-degree bearing error puts the far end of
+// an eighteen-metre run three metres off to the side - which a chevron eight
+// metres across still covers, and a narrow band would not have.
+const PATH_LENGTH_M = 18;
 
-// How wide the band is, in metres. The same width the anchored band uses (see
-// GroundPath.widthM in the Swift view), because the two swap over mid-walk and a
-// change of width at that moment would read as the guidance changing rather than
-// as the same guidance from a different source.
-const PATH_WIDTH_M = 0.9;
+// The chevron, in metres: how far it spans, how thick its arms are drawn, and
+// how far its point reaches forward as a fraction of its span.
+//
+// The same shape the anchored guidance uses, because the two swap over mid-walk
+// and a change of *form* at that moment would read as the guidance itself
+// changing rather than as the same guidance from a different source. Only its
+// steadiness differs, which is honest: that is the only thing that did change.
+//
+// Fixed at the wide end of the anchored version's range rather than measured.
+// There is nothing here to measure it from - no pose, no accuracy figure, no
+// offset from a route line - and this is the *less* certain of the two paths,
+// so the wide end is the honest end to sit at.
+const CHEVRON_WIDTH_M = 8;
+const CHEVRON_ARM_M = 0.34;
+const CHEVRON_SWEEP_FRACTION = 0.35;
+
+// Where the first one sits and how far apart they are. Far enough out that the
+// nearest is not under the walker's own feet, which is the one place a marker
+// on the ground says nothing.
+const CHEVRON_FIRST_M = 4;
+const CHEVRON_SPACING_M = 6;
+
+// The thinnest an arm is drawn, whatever perspective says. A stroke below a
+// couple of points disappears into the camera's own noise.
+const MIN_STROKE_PX = 2.5;
 
 // How far the path takes to swing into a turn, centred on the turn point. A
 // walker rounds a corner rather than pivoting on it, and a hard corner would put
@@ -122,9 +147,9 @@ export function GroundArrows({
 }: GroundArrowsProps) {
   const { width, height } = useWindowDimensions();
 
-  const band = useMemo(() => {
-    if (bearingToNext === undefined) return undefined;
-    return buildBand(
+  const chevrons = useMemo(() => {
+    if (bearingToNext === undefined) return [];
+    return buildChevrons(
       bearingToNext,
       metersToNext ?? Infinity,
       bearingAfterNext ?? bearingToNext,
@@ -134,39 +159,49 @@ export function GroundArrows({
     );
   }, [bearingToNext, metersToNext, bearingAfterNext, pitchDegrees, width, height]);
 
-  if (!band) return null;
+  if (chevrons.length === 0) return null;
 
   return (
     <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Defs>
-        <LinearGradient
-          id="ground-arrows-fade"
-          x1="0"
-          y1={band.bottom}
-          x2="0"
-          y2={band.top}
-          gradientUnits="userSpaceOnUse"
-        >
-          <Stop offset={0} stopColor={color} stopOpacity={NEAR_OPACITY} />
-          <Stop offset={1} stopColor={color} stopOpacity={FAR_OPACITY} />
-        </LinearGradient>
-      </Defs>
+      {/* Three passes per chevron, widest first, matching the three strips the
+          anchored version builds in 3D: a dark halo, a white rim, then the
+          colour. Not decoration - any single outline colour disappears against
+          one of the two grounds this has to work on, pale concrete and dark wet
+          asphalt, so it gets both.
 
-      <Polygon
-        points={band.points}
-        fill="none"
-        stroke="rgba(0,0,0,0.55)"
-        strokeWidth={HALO_WIDTH}
-        strokeLinejoin="round"
-      />
-      <Polygon
-        points={band.points}
-        fill="url(#ground-arrows-fade)"
-        stroke="#ffffff"
-        strokeOpacity={0.85}
-        strokeWidth={RIM_WIDTH}
-        strokeLinejoin="round"
-      />
+          Round joins and caps because the point of the V is a real corner and
+          the arm ends are real ends; mitred joins on a stroke this thick spike
+          out past the shape at the point. */}
+      {chevrons.map((chevron, index) => (
+        <React.Fragment key={index}>
+          <Polyline
+            points={chevron.points}
+            fill="none"
+            stroke="rgba(0,0,0,0.55)"
+            strokeWidth={chevron.stroke + HALO_WIDTH}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+          <Polyline
+            points={chevron.points}
+            fill="none"
+            stroke="#ffffff"
+            strokeOpacity={0.85}
+            strokeWidth={chevron.stroke + RIM_WIDTH}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+          <Polyline
+            points={chevron.points}
+            fill="none"
+            stroke={color}
+            strokeOpacity={chevron.opacity}
+            strokeWidth={chevron.stroke}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        </React.Fragment>
+      ))}
     </Svg>
   );
 }
@@ -177,125 +212,106 @@ interface PathPose {
   heading: number;
 }
 
-interface Band {
+interface Chevron {
+  /** The three corners on screen, `x,y x,y x,y`, first arm tip to last. */
   points: string;
-  /** Where the band reaches on screen, which is what the fade is anchored to. */
-  top: number;
-  bottom: number;
+  /** How thick to draw the arms here, in pixels. */
+  stroke: number;
+  opacity: number;
 }
 
-// The band as a single closed polygon: down one edge and back up the other.
+// The chevrons ahead, each as three corners on screen.
 //
-// Undefined when there is nothing left to draw, which on this path means the
-// walker is facing so far from the route that all of it is behind the lens.
-function buildBand(
+// Empty when there is nothing left to draw, which on this path means the walker
+// is facing so far from the route that all of it is behind the lens.
+function buildChevrons(
   bearingToNextDegrees: number,
   metersToNext: number,
   bearingAfterNextDegrees: number,
   pitchDegrees: number,
   width: number,
   height: number,
-): Band | undefined {
+): Chevron[] {
   const poses = walkPath(
     toRadians(bearingToNextDegrees),
     metersToNext,
     toRadians(bearingAfterNextDegrees),
   );
+
   // Focal length in pixels, from the field of view the preview is showing.
   const focal = width / 2 / Math.tan(toRadians(CAMERA_FOV_DEG) / 2);
   const pitch = toRadians(pitchDegrees);
-  const half = PATH_WIDTH_M / 2;
+  const halfWidth = CHEVRON_WIDTH_M / 2;
+  const reach = (CHEVRON_WIDTH_M * CHEVRON_SWEEP_FRACTION) / 2;
 
-  const leftEdge: { x: number; y: number }[] = [];
-  const rightEdge: { x: number; y: number }[] = [];
+  const chevrons: Chevron[] = [];
+  let travelled = 0;
+  let nextAt = CHEVRON_FIRST_M;
+  let previous: PathPose | undefined;
 
-  for (const pose of clipToCamera(poses, pitch)) {
-    // The band's width runs across the path, so it is the heading turned a
-    // quarter turn - and it follows the bend, since each pose carries its own.
-    const acrossX = Math.cos(pose.heading) * half;
-    const acrossZ = -Math.sin(pose.heading) * half;
-
-    const left = projectGroundPoint(
-      pose.x - acrossX,
-      pose.z - acrossZ,
-      focal,
-      pitch,
-      width,
-      height,
-    );
-    const right = projectGroundPoint(
-      pose.x + acrossX,
-      pose.z + acrossZ,
-      focal,
-      pitch,
-      width,
-      height,
-    );
-    // One edge behind the lens while the other is in front happens only where
-    // the band is nearly edge-on, and there is no sensible half-width to draw.
-    if (!left || !right) continue;
-
-    leftEdge.push(left);
-    rightEdge.push(right);
-  }
-
-  if (leftEdge.length < 2) return undefined;
-
-  const corners = [...leftEdge, ...rightEdge.reverse()];
-  let top = Infinity;
-  let bottom = -Infinity;
-  for (const corner of corners) {
-    if (corner.y < top) top = corner.y;
-    if (corner.y > bottom) bottom = corner.y;
-  }
-
-  return {
-    points: corners.map((corner) => `${corner.x.toFixed(1)},${corner.y.toFixed(1)}`).join(' '),
-    top,
-    // A band seen exactly edge-on has no height, and a gradient between two
-    // equal points is undefined.
-    bottom: bottom > top ? bottom : top + 1,
-  };
-}
-
-// The path with everything at or behind the lens removed, and the step that
-// straddles the near plane cut at it.
-//
-// Depth here is the same quantity `projectGroundPoint` divides by, so a pose
-// that survives this is one that projects.
-function clipToCamera(poses: PathPose[], pitch: number): PathPose[] {
-  const depthOf = (pose: PathPose) =>
-    CAMERA_HEIGHT_M * Math.sin(pitch) + pose.z * Math.cos(pitch);
-
-  const kept: PathPose[] = [];
-
-  for (let i = 0; i < poses.length; i += 1) {
-    const here = poses[i];
-    const depth = depthOf(here);
-    if (depth >= MIN_DEPTH_M) {
-      kept.push(here);
-      continue;
+  for (const pose of poses) {
+    if (previous) {
+      travelled += Math.hypot(pose.x - previous.x, pose.z - previous.z);
     }
+    previous = pose;
 
-    // Crossing into view: interpolate to the exact near plane, so the band
-    // starts at the bottom of the frame rather than a step inside it.
-    const next = poses[i + 1];
-    if (!next) continue;
-    const nextDepth = depthOf(next);
-    if (nextDepth < MIN_DEPTH_M) continue;
+    if (travelled < nextAt) continue;
+    nextAt += CHEVRON_SPACING_M;
 
-    const t = (MIN_DEPTH_M - depth) / (nextDepth - depth);
-    kept.push({
-      x: here.x + (next.x - here.x) * t,
-      z: here.z + (next.z - here.z) * t,
-      // Not interpolated. Over one 20cm step the heading barely moves, and
-      // taking the one ahead keeps the band's first edge square to the
-      // direction it is about to run in.
-      heading: next.heading,
+    // Along the path and across it, from this pose's own heading, so a chevron
+    // sitting in the bend is aimed round the bend rather than down the leg it
+    // started on.
+    const alongX = Math.sin(pose.heading);
+    const alongZ = Math.cos(pose.heading);
+    const acrossX = Math.cos(pose.heading);
+    const acrossZ = -Math.sin(pose.heading);
+
+    const corners = [
+      {
+        x: pose.x - alongX * reach - acrossX * halfWidth,
+        z: pose.z - alongZ * reach - acrossZ * halfWidth,
+      },
+      { x: pose.x + alongX * reach, z: pose.z + alongZ * reach },
+      {
+        x: pose.x - alongX * reach + acrossX * halfWidth,
+        z: pose.z - alongZ * reach + acrossZ * halfWidth,
+      },
+    ];
+
+    // All three corners or none of them. A chevron with one arm behind the lens
+    // is not a smaller chevron, it is a torn one - and unlike the band this
+    // replaced, dropping a whole chevron leaves no hole, because the gaps between
+    // them are the shape.
+    const projected: { x: number; y: number }[] = [];
+    for (const corner of corners) {
+      const point = projectGroundPoint(corner.x, corner.z, focal, pitch, width, height);
+      if (!point) break;
+      projected.push(point);
+    }
+    if (projected.length < corners.length) continue;
+
+    // The same depth `projectGroundPoint` divides by, so an arm drawn this thick
+    // is a third of a metre of ground at this distance - foreshortened the way
+    // anything lying flat is, rather than a fixed number of pixels that would
+    // read as a sticker on the lens.
+    const depth = CAMERA_HEIGHT_M * Math.sin(pitch) + pose.z * Math.cos(pitch);
+
+    // Fainter with distance, by how far out it actually is rather than by its
+    // position in the list - the nearest chevron is the same brightness whether
+    // it is the only one on screen or the first of four.
+    const span = Math.max(1, PATH_LENGTH_M - CHEVRON_FIRST_M);
+    const fade = Math.min(1, Math.max(0, (travelled - CHEVRON_FIRST_M) / span));
+
+    chevrons.push({
+      points: projected
+        .map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+        .join(' '),
+      stroke: Math.max(MIN_STROKE_PX, (CHEVRON_ARM_M * focal) / depth),
+      opacity: NEAR_OPACITY + (FAR_OPACITY - NEAR_OPACITY) * fade,
     });
   }
 
-  return kept;
+  return chevrons;
 }
 
 // The path ahead, sampled every step out to the full length.

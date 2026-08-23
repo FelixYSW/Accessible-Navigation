@@ -169,28 +169,47 @@ enum GroundPath {
   /// narrows towards the horizon exactly as a real painted line would. That
   /// taper is doing the work the chevrons' spacing used to do - it says which
   /// way is "away" without anything having to be pointed.
-  static let widthM: Float = 0.9
-
-  /// The direction triangles lying in the band, in metres, and how often one
-  /// appears.
+  /// The bounds the chevron's width moves between.
   ///
-  /// Narrower than the band so it reads as a marking *on* the path rather than
-  /// as the path changing shape, and spaced by anchor rather than by distance
-  /// along the visible stretch - a triangle every second anchor sits on a fixed
-  /// patch of ground and stays there, where one placed every 2.4m along what is
-  /// currently on screen would crawl forwards as the walker moved.
-  static let markerLengthM: Float = 0.45
-  static let markerWidthM: Float = 0.4
-  static let markerEveryNthAnchor = 2
+  /// The width itself is a prop - see `guidanceWidth` - because it is the one
+  /// measurement here that is not a design choice. It is a statement about how
+  /// much the app actually knows, and it has to be allowed to say "not much".
+  ///
+  /// Three metres is a footpath. Fourteen is a two-lane road with a pavement
+  /// and a row of parked cars on each side, which is what a chevron has to span
+  /// when the route line is on one pavement and the walker is on the other.
+  static let minGuidanceWidthM: Float = 3
+  static let maxGuidanceWidthM: Float = 14
+  static let defaultGuidanceWidthM: Float = 5
 
-  /// How far the markers sit above the band in the 3D renderer. Two surfaces at
-  /// exactly the same height flicker against each other as the camera moves.
-  static let markerLiftM: Float = 0.01
+  /// How thick the chevron's arms are drawn, and how far its point reaches
+  /// forward, as a fraction of its width.
+  ///
+  /// The arms stay a third of a metre whatever the span, which is the whole
+  /// reason this shape was worth changing to. A band twelve metres wide would be
+  /// twelve metres of paint over the pavement; twelve metres of chevron is two
+  /// strokes a third of a metre thick with everything between them left clear.
+  /// Wide and sparse are not two wishes, they are the same one.
+  static let chevronArmM: Float = 0.34
+  static let chevronSweepFraction: Float = 0.35
 
-  /// How far the dark edge stands out past the triangle it outlines. The
-  /// overlay draws this as a 1pt stroke; in metres at the distance most of the
-  /// band is read at, that is about a centimetre.
-  static let markerEdgeM: Float = 0.01
+  /// How often a chevron appears, counted in anchors rather than in metres.
+  ///
+  /// By anchor and not by distance along the visible stretch, because anchor ids
+  /// are lattice indices measured from the start of the route. A chevron on every
+  /// fifth of them lands on a fixed patch of ground and stays there; one placed
+  /// every six metres along whatever is currently on screen would crawl forwards
+  /// as the walker moved, which is the one thing a marker on the ground must
+  /// never do.
+  ///
+  /// Four anchors at the route's 2m spacing is a chevron every eight metres.
+  ///
+  /// It has to divide a million exactly. The sideways shift is folded into the
+  /// anchor ids as a whole multiple of a million - see OFFSET_ID_STRIDE - so a
+  /// value that did not divide it would change *which* anchors are marked every
+  /// time the run moved sideways, and the chevrons would jump to new ground for
+  /// no reason the walker could see. Four divides it; three would not.
+  static let markerEveryNthAnchor = 4
 
   /// How far a mitred corner may reach past half the band's width before it
   /// is cut off square. 1/cos(half the turn), so this is passed at about 143
@@ -244,12 +263,6 @@ enum GroundPath {
   /// and they outline rather than cover.
   static let nearOpacity: CGFloat = 0.32
   static let farOpacity: CGFloat = 0.22
-  /// How wide the travelling highlight is, as a fraction of the run. Doubles
-  /// as where the pulse sits inside its own texture - the two have to agree
-  /// for advanceWave to place it.
-  static let wavePulseHalfWidth: Float = 0.22
-  static let waveCycleSeconds: CFTimeInterval = 1.9
-  static let waveStrength: CGFloat = 0.35
 
   /// Ground already covered.
   static let walkedNearOpacity: CGFloat = 0.5
@@ -288,6 +301,60 @@ enum GroundPath {
   /// centimetres is well under the width of the band, so a correction large
   /// enough to see is a correction large enough to rebuild for.
   static let rebuildMoveM: Float = 0.05
+
+  /// How tall the destination pin stands, in metres.
+  ///
+  /// About waist height on an adult. Big enough to be unmissable from across a
+  /// junction and to read as an object standing on the pavement, without
+  /// becoming a wall that hides the doorway it is pointing at.
+  static let pinHeightM: Float = 1.0
+
+  /// How wide the pin's head is, as a fraction of its height. Two thirds - the
+  /// classic map-pin proportion, and the same figures the flat one was drawn
+  /// from, so this is recognisably the marker that was there before rather than
+  /// a redesign smuggled in with a rendering change.
+  static let pinHeadRadiusFraction: Float = 1.0 / 3
+
+  /// How glossy the pin is: plastic, not metal and not chalk.
+  ///
+  /// This is the number that decides whether it looks like a rendering or like
+  /// an object someone left on the pavement. A surface with no gloss at all takes
+  /// no highlight and shows nothing of the room it is standing in, and nothing in
+  /// a camera frame behaves that way.
+  static let pinRoughness: CGFloat = 0.35
+
+  /// A little light of its own, so a marker in deep shade is still findable.
+  /// Realism is the goal right up to the point where it hides the destination.
+  static let pinGlow: CGFloat = 0.16
+
+  /// Past this the pin is not drawn. Not a rendering limit - an honesty one.
+  /// Geospatial anchors are placed against a pose whose error grows with range,
+  /// and a pin planted two hundred metres off would be confidently pointing
+  /// through three buildings at a spot it has no business being sure about.
+  static let pinFarCutM: Float = 60
+
+  /// And inside this it is not drawn either.
+  ///
+  /// True perspective on a waist-high object at arm's length is a red slab
+  /// across the whole frame. Correct, and the worst possible thing to put there:
+  /// it hides the pavement at the exact moment the walker is stepping onto it,
+  /// which is the same argument that took the band down to a third opacity.
+  ///
+  /// The overlay version handled this by capping the drawn size, which is a lie
+  /// told gently - the pin stopped growing while everything around it kept
+  /// going, so it read as shrinking on approach. Cutting it is honest, and it
+  /// costs nothing: the label is drawn by the JS layer at a fixed size and stays,
+  /// so the destination is still named at the moment the pin gives way to it.
+  static let pinNearCutM: Float = 1.5
+
+  /// The contact shadow under the pin, as a fraction of its height, and how
+  /// dark its centre is.
+  ///
+  /// Not decoration. A marker with nothing beneath it reads as hovering, and
+  /// hovering is the single loudest tell that a thing has been pasted onto the
+  /// picture rather than placed in it.
+  static let pinShadowRadiusFraction: Float = 0.35
+  static let pinShadowOpacity: CGFloat = 0.38
 }
 
 /// An ARKit camera preview whose frames are also fed to ARCore's Geospatial
@@ -379,6 +446,15 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   /// on Earth it is, and this needs only to know where the floor is. Somewhere
   /// with no Street View coverage, no GPS fix and no sky is a perfectly good
   /// place to check whether the path looks right.
+  /// How wide the chevrons are drawn, in metres, as the JS side works it out.
+  ///
+  /// A prop and not a constant because it is not a matter of taste. It is how
+  /// far apart the two answers to "where is the route" currently are - what the
+  /// map says, and where the walker is standing - and a marker narrower than
+  /// that gap is claiming a precision nobody has. See the note in
+  /// ARNavigationScreen where it is measured.
+  private var guidanceWidth = GroundPath.defaultGuidanceWidthM
+
   private var previewMode = false
   private var previewComponent = "path"
   private var previewClearToken = 0
@@ -413,14 +489,8 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private var builtPlan: [simd_float2] = []
   private var builtSplits: [Int] = []
 
-  /// Built once and kept. Neither ramp ever changes, and both allocate a bitmap.
-  /// The wave materials currently in the scene, so their phase can be advanced
-  /// each frame. Emptied whenever the nodes are.
-  private var waveMaterials: [SCNMaterial] = []
 
-  private var cachedFade: UIImage?
-  private var cachedWalked: UIImage?
-  private var cachedWave: UIImage?
+  private var cachedShadow: UIImage?
   private var previewReady = false
   private var previewStateSent = false
   private var lastReadinessProbe: TimeInterval = 0
@@ -480,6 +550,23 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // this one is told about the nodes SceneKit makes for anchors, which is
     // where the room mesh is turned into an occluder.
     sceneView.delegate = self
+
+    // Lets ARKit drive the scene's lighting from what it can see: the ambient
+    // intensity and colour temperature it estimates each frame, and the
+    // environment probe the configuration asks for. Without this the probe is
+    // built and never used.
+    sceneView.automaticallyUpdatesLighting = true
+    // A curved silhouette against a photograph is where aliasing shows worst,
+    // and the pin is nothing but curved silhouette.
+    sceneView.antialiasingMode = .multisampling4X
+
+    // A neutral environment to start from, so the pin is lit on the very first
+    // frame. ARKit replaces this the moment its own probe is ready; without it
+    // a physically based surface with nothing to reflect renders as what it
+    // physically is under no light at all, which is black.
+    sceneView.scene.lightingEnvironment.contents = UIColor(white: 0.65, alpha: 1)
+    sceneView.scene.lightingEnvironment.intensity = 1
+
     addSubview(sceneView)
 
     startTracking()
@@ -558,11 +645,19 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     previewComponent = component
   }
 
+  func setGuidanceWidth(_ width: Float) {
+    guard abs(width - guidanceWidth) > 0.01 else { return }
+    guidanceWidth = width
+    // The chevrons carry this in their geometry, so a change to it is a change
+    // of shape and has to be built. Nothing else in the rebuild test would
+    // notice - not a point has moved.
+    needsRebuild = true
+  }
+
 
   private func clearPathNodes() {
     for node in pathNodes { node.removeFromParentNode() }
     pathNodes.removeAll()
-    waveMaterials.removeAll()
     // The signature has to go with them. Left set, the next tick would compare
     // an unchanged shape against nodes that are no longer in the scene and
     // decline to rebuild the very thing it just removed.
@@ -746,6 +841,20 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
       configuration.frameSemantics.insert(.personSegmentationWithDepth)
     }
+
+    // A cube map of the surroundings, assembled from the camera feed as the
+    // walker moves and filled in by ARKit where they have not looked.
+    //
+    // This is the setting behind why an object in AR Quick Look sits in the room
+    // and a hand-built one usually does not. Without it a rendered surface can
+    // only reflect whatever the app decided to imagine; with it, it reflects the
+    // actual pavement, the actual sky, the actual wall to its left - and the
+    // reflection changes as the walker moves around it, which is a cue the eye
+    // reads immediately and cannot be faked by choosing a nicer colour.
+    //
+    // It costs nothing here beyond the probe itself: the band is constant-shaded
+    // and ignores lighting entirely, so this is doing work for the pin alone.
+    configuration.environmentTexturing = .automatic
 
     sceneView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
   }
@@ -1138,7 +1247,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         },
         arFrame: arFrame
       ) {
-        previewStretches(arFrame: arFrame)
+        previewBuild(arFrame: arFrame)
       }
 
       // Only the pin goes over to the JS layer. The band is geometry in the
@@ -1195,13 +1304,16 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // Everything that is a point rather than a path: the destination pin. Sent
     // with its own kind, since the JS side draws it as a sprite standing at the
     // projected point rather than as a shape on the ground.
+    var pins: [simd_float3] = []
     for request in requestedAnchors where request.kind != "route" {
       guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { continue }
+      // Stands on the floor for the same reason the band lies on it - a pin
+      // whose base is at eye level reads as floating in the air.
+      let standing = onGround(origin(of: anchor.transform), id: request.id, arFrame: arFrame)
+      pins.append(standing)
       projected.append(
         project(
-          // Stands on the floor for the same reason the ribbon lies on it -
-          // a pin whose base is at eye level reads as floating in the air.
-          position: onGround(origin(of: anchor.transform), id: request.id, arFrame: arFrame),
+          position: standing,
           index: request.id,
           kind: request.kind,
           arFrame: arFrame,
@@ -1232,16 +1344,19 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       // away in the direction you came from, indistinguishable from one telling
       // you to go that way.
       let (walked, ahead) = splitAtWalker(route, arFrame: arFrame)
-      return [
-        BandStretch(points: walked, walked: true),
-        BandStretch(points: ahead, walked: false),
-      ]
+      return PathBuild(
+        stretches: [
+          BandStretch(points: walked, walked: true),
+          BandStretch(points: ahead, walked: false),
+        ],
+        pins: pins
+      )
     }
 
-    // What is left for the JS layer: the destination pin and, on the test
-    // screen, the control anchors. Both are points rather than shapes lying on
-    // the ground, which is exactly the distinction that decides which side of
-    // the bridge a thing is drawn on.
+    // What is left for the JS layer: the destination's *label*, and the control
+    // anchors on the test screen. The pin itself is in the scene now; what goes
+    // over the bridge is the point to hang its name above, at a size that does
+    // not shrink with distance.
     onAnchorsUpdate(["anchors": projected])
   }
 
@@ -1291,10 +1406,15 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     }
   }
 
-  /// The route's anchored points, as the ground probe wants them.
+  /// Every anchored point on the route, as the ground probe wants them.
+  ///
+  /// The destination is in here as well as the band's own points, which it was
+  /// not before. A pin standing on a slope wants the floor found under itself
+  /// just as much as the band does, and without a reading of its own it fell
+  /// back to the level measured under the walker - which is the wrong level by
+  /// however much the ground rises between here and there.
   private func routeGroundPoints() -> [(id: Int, position: simd_float3)] {
     requestedAnchors.compactMap { request in
-      guard request.kind == "route" else { return nil }
       guard let anchor = placedAnchors[request.id], anchor.hasValidTransform else { return nil }
       return (id: request.id, position: origin(of: anchor.transform))
     }
@@ -1315,6 +1435,13 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private struct BandStretch {
     let points: [PathPoint]
     let walked: Bool
+  }
+
+  /// Everything to be laid down this rebuild: the stretches of band, and the
+  /// ground points any destination pins stand on.
+  private struct PathBuild {
+    let stretches: [BandStretch]
+    let pins: [simd_float3]
   }
 
   /// The guidance, built as geometry inside the AR scene.
@@ -1345,21 +1472,15 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   ///   - points: every anchored point the shape is derived from, used to decide
   ///     whether anything has actually moved.
   ///   - splits: how far along each run the walker stands, for the same test.
-  ///   - build: the stretches to lay down. Called only when a rebuild is due, so
+  ///   - build: what to lay down. Called only when a rebuild is due, so
   ///     the work of cutting and threading them is not done to be thrown away on
   ///     the ticks where nothing has changed.
   private func updatePathGeometry(
     points: [(id: Int, position: simd_float3)],
     splits: [Float],
     arFrame: ARFrame,
-    build: () -> [BandStretch]
+    build: () -> PathBuild
   ) {
-    // The sweep advances every frame, regardless of whether the geometry is
-    // rebuilt. It is a phase off the clock rather than an animation attached to a
-    // material, so it survives the rebuilds below - see the note where the wave
-    // material is made.
-    advanceWave(arFrame: arFrame)
-
     // Rebuilt only when something about it has moved - not on a clock. The
     // *rendering* stays frame-locked regardless, which is the entire point of
     // drawing it this way; what a rebuild changes is the shape.
@@ -1392,7 +1513,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
     guard moved else { return }
 
-    let stretches = build()
+    let laid = build()
 
     // In this order. Clearing resets the signature, so recording what has just
     // been built has to come after it or it would be wiped by its own bookkeeping
@@ -1403,11 +1524,181 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     builtPlan = plan
     needsRebuild = false
 
-    for stretch in stretches {
-      guard let node = bandNode(along: stretch.points, walked: stretch.walked) else { continue }
+    for stretch in laid.stretches {
+      for node in chevronNodes(along: stretch.points, walked: stretch.walked) {
+        sceneView.scene.rootNode.addChildNode(node)
+        pathNodes.append(node)
+      }
+    }
+
+    // Measured flat. The pin is on the ground and the camera is at head height,
+    // so counting the vertical drop would report a metre and a half of distance
+    // to something the walker is standing on top of.
+    let camera = origin(of: arFrame.camera.transform)
+    for pin in laid.pins {
+      let away = simd_length(simd_float3(pin.x - camera.x, 0, pin.z - camera.z))
+      guard away > GroundPath.pinNearCutM, away < GroundPath.pinFarCutM else { continue }
+      let node = pinNode(at: pin)
       sceneView.scene.rootNode.addChildNode(node)
       pathNodes.append(node)
     }
+  }
+
+  /// The destination, standing on the spot.
+  ///
+  /// A billboard, and that is the correct treatment rather than a shortcut: a
+  /// marker that must be readable from every approach has to face the viewer,
+  /// and something that always faces the viewer is a flat thing turned towards
+  /// them. What was wrong before was not the flatness - it was that the flat
+  /// thing lived on the JS overlay, painted over the whole picture, so a wall
+  /// could not hide it, nothing could pass in front of it, and it had no depth
+  /// relationship to the ground it claimed to be standing on. That is what read
+  /// as fake. Here it is a plane in the scene: same shape, real depth.
+  ///
+  /// The label is not here. It stays on the JS layer, drawn at a fixed size,
+  /// because a label that shrank with distance would be unreadable exactly when
+  /// the walker most wants to know which doorway is meant. The pin is an object
+  /// and belongs in the world; its name is interface and belongs on the glass.
+  private func pinNode(at position: simd_float3) -> SCNNode {
+    let node = SCNNode()
+    node.simdPosition = position
+
+    if let shadow = shadowImage() {
+      let radius = CGFloat(GroundPath.pinHeightM * GroundPath.pinShadowRadiusFraction)
+      let disc = SCNPlane(width: radius * 2, height: radius * 2)
+      let material = SCNMaterial()
+      material.lightingModel = .constant
+      material.diffuse.contents = shadow
+      material.isDoubleSided = true
+      material.writesToDepthBuffer = false
+      disc.materials = [material]
+
+      let discNode = SCNNode(geometry: disc)
+      // Laid flat. A plane stands upright by default, which would put the
+      // shadow on its edge and show as a dark line rather than a pool.
+      discNode.eulerAngles.x = -.pi / 2
+      discNode.position = SCNVector3(0, GroundPath.bandLiftM, 0)
+      node.addChildNode(discNode)
+    }
+
+    // A head on a tapered spike, both solid, both lit by the room.
+    //
+    // No billboard, and none needed: a solid of revolution presents the same
+    // silhouette from every direction, so it faces the walker from every
+    // approach by being that shape rather than by being turned. The flat version
+    // had to be spun to face you, which is exactly the trick that gives a sprite
+    // away when you move around it.
+    let height = GroundPath.pinHeightM
+    let headRadius = height * GroundPath.pinHeadRadiusFraction
+    let headCentre = height - headRadius
+
+    // Where the spike meets the head, worked out so the two are tangent and the
+    // silhouette has no crease in it. A cone jammed into a sphere at any old
+    // angle leaves a visible ring, and a ring is the sort of thing the eye reads
+    // as two objects rather than one.
+    //
+    // The tip sits `headCentre` below the head's centre, so the tangent line
+    // from it is sqrt(headCentre^2 - headRadius^2) long; the tangent circle lies
+    // that far along it, resolved into a height up the axis and a radius out.
+    let tangent = sqrt(max(0, headCentre * headCentre - headRadius * headRadius))
+    let sinAlpha = headCentre > 0 ? headRadius / headCentre : 0
+    let cosAlpha = headCentre > 0 ? tangent / headCentre : 1
+    let joinY = tangent * cosAlpha
+    let joinRadius = tangent * sinAlpha
+
+    let material = pinMaterial()
+
+    let spike = SCNCone(
+      topRadius: CGFloat(joinRadius),
+      bottomRadius: 0,
+      height: CGFloat(joinY)
+    )
+    spike.radialSegmentCount = 48
+    spike.materials = [material]
+    let spikeNode = SCNNode(geometry: spike)
+    // A cone is centred on its own height with the point at -Y, so lifting it
+    // half its height puts the point on the ground.
+    spikeNode.position = SCNVector3(0, joinY / 2, 0)
+    node.addChildNode(spikeNode)
+
+    let head = SCNSphere(radius: CGFloat(headRadius))
+    head.segmentCount = 48
+    head.materials = [material]
+    let headNode = SCNNode(geometry: head)
+    headNode.position = SCNVector3(0, headCentre, 0)
+    node.addChildNode(headNode)
+
+    return node
+  }
+
+  /// The pin's surface.
+  ///
+  /// Physically based, which is the whole of the difference. A constant-shaded
+  /// material is drawn at exactly the colour it was given, whatever is happening
+  /// around it - correct for the band, which is a marking rather than an object,
+  /// and wrong for something claiming to be standing on the pavement. This one is
+  /// lit by ARKit's estimate of the real light and reflects the environment probe
+  /// built from the camera feed, so it dims under a tree, warms under a sodium
+  /// lamp, and carries a highlight that moves as the walker moves.
+  ///
+  /// One material shared by both pieces, so the highlight runs across the join
+  /// rather than stopping at it.
+  private func pinMaterial() -> SCNMaterial {
+    // The classic map-pin red, and deliberately not the app's green. This is the
+    // one marker that means "the thing you are walking to", and matching the
+    // guidance colour would make it one more green thing among the guidance.
+    let red = UIColor(red: 0.898, green: 0.125, blue: 0.180, alpha: 1)
+
+    let material = SCNMaterial()
+    material.lightingModel = .physicallyBased
+    material.diffuse.contents = red
+    material.roughness.contents = NSNumber(value: Double(GroundPath.pinRoughness))
+    material.metalness.contents = NSNumber(value: 0.0)
+    // Its own faint glow, in its own colour so it reads as the pin being bright
+    // rather than as a grey wash over it.
+    material.emission.contents = UIColor(
+      red: 0.898 * GroundPath.pinGlow,
+      green: 0.125 * GroundPath.pinGlow,
+      blue: 0.180 * GroundPath.pinGlow,
+      alpha: 1
+    )
+    return material
+  }
+
+
+  /// The soft pool under the pin: dark at the centre, nothing at the rim.
+  private func shadowImage() -> UIImage? {
+    if let cachedShadow { return cachedShadow }
+
+    let size = CGSize(width: 128, height: 128)
+    let format = UIGraphicsImageRendererFormat.default()
+    format.opaque = false
+
+    let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+      guard
+        let gradient = CGGradient(
+          colorsSpace: CGColorSpaceCreateDeviceRGB(),
+          colors: [
+            UIColor(white: 0, alpha: GroundPath.pinShadowOpacity).cgColor,
+            UIColor(white: 0, alpha: 0).cgColor,
+          ] as CFArray,
+          locations: [0, 1]
+        )
+      else { return }
+
+      let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+      context.cgContext.drawRadialGradient(
+        gradient,
+        startCenter: centre,
+        startRadius: 0,
+        endCenter: centre,
+        endRadius: size.width / 2,
+        options: []
+      )
+    }
+
+    cachedShadow = image
+    return image
   }
 
   /// The placements as stretches of band.
@@ -1422,21 +1713,24 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   /// direction of travel of its own, but walking along one is the nearest thing
   /// to walking a route that can be done indoors - and it is the only way to see
   /// the covered half behave without going outside and planning a journey.
-  private func previewStretches(arFrame: ARFrame) -> [BandStretch] {
-    previewRuns.flatMap { run -> [BandStretch] in
-      // A pin is not a band. It is drawn as a sprite at a projected point,
-      // because a destination marker has to face the walker from every approach -
-      // modelling it in 3D would buy nothing and cost it the one property it must
-      // have.
-      guard run.kind != "destination" else { return [] }
+  private func previewBuild(arFrame: ARFrame) -> PathBuild {
+    var stretches: [BandStretch] = []
+    var pins: [simd_float3] = []
 
+    for run in previewRuns {
       let points = previewPoints(of: run, arFrame: arFrame)
+
+      if run.kind == "destination" {
+        if let first = points.first { pins.append(first.position) }
+        continue
+      }
+
       let (walked, ahead) = splitAtWalker(points, arFrame: arFrame)
-      return [
-        BandStretch(points: walked, walked: true),
-        BandStretch(points: ahead, walked: false),
-      ]
+      stretches.append(BandStretch(points: walked, walked: true))
+      stretches.append(BandStretch(points: ahead, walked: false))
     }
+
+    return PathBuild(stretches: stretches, pins: pins)
   }
 
   /// One placed run as points on the ground, each at the floor found under it.
@@ -1474,80 +1768,121 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     return min(length, max(0, simd_dot(toCamera, axis) / length))
   }
 
-  /// Slides the highlight texture along the band, one pass per cycle.
+  /// The guidance as a run of chevrons lying on the ground.
   ///
-  /// Sampling at v + t shows the feature that lives at v + t where v is, so a
-  /// decreasing t walks the bright band towards larger v - which is away from
-  /// the walker.
-  private func advanceWave(arFrame: ARFrame) {
-    guard !waveMaterials.isEmpty else { return }
+  /// This replaced a continuous band, and the reason was not that the band was
+  /// drawn badly. It was that the band was drawn *precisely*, and the data
+  /// underneath it is not precise.
+  ///
+  /// A walking route from OpenRouteService is a single line, usually the road's
+  /// centreline, because OSM in the study area has a few thousand mapped footways
+  /// against its whole street network. Where a pavement is mapped it may be the
+  /// one on the far side. So the route's sideways accuracy is about half a road
+  /// width - and a band ninety centimetres across says "walk exactly here", which
+  /// is a claim nothing supports. The same six-metre error looks like a broken
+  /// app inside a ninety-centimetre band and like a rough guide inside a
+  /// six-metre chevron. It is a rough guide. It should look like one.
+  ///
+  /// Chevrons rather than a wider band because width and coverage come apart
+  /// here. A band wide enough to span a road would be a sheet of paint over the
+  /// whole road, which is exactly what was taken away for being unsafe. A chevron
+  /// spans the same width with two strokes a third of a metre thick and leaves
+  /// everything between them clear.
+  ///
+  /// Everything else is unchanged and deliberately so: the floor found under each
+  /// point, the slope followed along the run, the grey for ground already walked,
+  /// the room mesh hiding what is behind a wall, the dark halo and bright rim that
+  /// keep it legible on both pale concrete and wet asphalt.
+  private func chevronNodes(along points: [PathPoint], walked: Bool) -> [SCNNode] {
+    guard points.count >= 2 else { return [] }
 
-    let phase = Float(
-      arFrame.timestamp.truncatingRemainder(dividingBy: GroundPath.waveCycleSeconds)
-        / GroundPath.waveCycleSeconds
+    let width = min(
+      GroundPath.maxGuidanceWidthM,
+      max(GroundPath.minGuidanceWidthM, guidanceWidth)
     )
+    let halfWidth = width / 2
+    let reach = width * GroundPath.chevronSweepFraction / 2
+    let up = simd_float3(0, 1, 0)
 
-    // Where the bright band sits along the run, in the same terms the overlay
-    // uses: it starts one half-width before the near end and finishes one past
-    // the far end, so the highlight enters and leaves rather than appearing
-    // and vanishing mid-band.
-    let half = GroundPath.wavePulseHalfWidth
-    let centre = phase * (1 + half * 2) - half
+    // Which points carry a chevron was decided when the anchors were made, from
+    // the anchor's own id - see `markerEveryNthAnchor`. Ids are lattice indices
+    // measured from the start of the route, so a chevron lands on the same patch
+    // of ground for the whole walk instead of sliding along as points come and go
+    // at the ends of the drawn stretch.
+    let marked = points.indices.filter { points[$0].marker }
+    guard !marked.isEmpty else { return [] }
 
-    // The texture keeps its peak a fixed distance in, so the translation is
-    // whatever puts that peak at `centre`: sampling at v + t shows the peak
-    // where v = peak - t.
-    let transform = SCNMatrix4MakeTranslation(0, half - centre, 0)
-    for material in waveMaterials {
-      material.diffuse.contentsTransform = transform
+    var nodes: [SCNNode] = []
+
+    for (ordinal, i) in marked.enumerated() {
+      let centre = points[i].position
+
+      // Taken across the point rather than from the leg leaving it. A single leg
+      // is a stride long and carries the anchor noise of both its ends; the span
+      // across the point averages that out, and a chevron is a direction
+      // indicator, so its aim is the whole of what it says.
+      let before = points[max(i - 1, 0)].position
+      let after = points[min(i + 1, points.count - 1)].position
+      guard
+        let direction = flattened(after - before)
+          ?? flattened(centre - before)
+          ?? flattened(after - centre)
+      else { continue }
+
+      let side = simd_cross(direction, up)
+
+      // A V, built as a three-point centreline, so the same sweep, the same mitre
+      // and the same three strips that drew the band draw this. The point of the
+      // V is a corner like any other and the mitre machinery already knows what
+      // to do with a corner - at these proportions it turns about seventy degrees
+      // and reaches out by 1.2, nowhere near the limit.
+      //
+      // All three points share the chevron's own floor height. Across four metres
+      // of road camber that is a few centimetres out at the arm tips, which is
+      // below what any of this resolves - and the slope that matters, the one
+      // along the route, is still followed because each chevron finds its own.
+      let arms = [
+        PathPoint(position: centre - direction * reach - side * halfWidth, marker: false),
+        PathPoint(position: centre + direction * reach, marker: false),
+        PathPoint(position: centre - direction * reach + side * halfWidth, marker: false),
+      ]
+
+      let fade = marked.count > 1 ? Float(ordinal) / Float(marked.count - 1) : 0
+      guard let node = chevronNode(arms: arms, walked: walked, fade: fade) else { continue }
+      nodes.append(node)
     }
+
+    return nodes
   }
 
-  /// The band as three concentric strips of triangles laid on the ground, with
-  /// the direction markers and the travelling highlight above them.
+  /// One chevron: three concentric strips laid on the ground, widest first.
   ///
-  /// Three strips, because a 3D renderer has no equivalent of a stroke. The
-  /// overlay gets its dark halo and bright rim by stroking one polygon at two
-  /// widths, and those are not decoration - they are what keeps the band legible
-  /// against pale concrete and dark wet asphalt alike, since any single outline
-  /// colour disappears against one of them. Here the same effect is built from
-  /// geometry: the same centreline swept at three half-widths, drawn widest
-  /// first.
+  /// Three strips because a 3D renderer has no equivalent of a stroke. The dark
+  /// halo and the bright rim are not decoration - they are what keeps the shape
+  /// legible against pale concrete and dark wet asphalt alike, since any single
+  /// outline colour disappears against one of them.
   ///
-  /// Built in world coordinates on a node with an identity transform, rather
-  /// than as a child of one anchor. A band spans many anchors and belongs to no
-  /// single one of them, so parenting it to the first would make the whole strip
-  /// swing whenever ARKit corrected that anchor alone.
-  private func bandNode(along points: [PathPoint], walked: Bool) -> SCNNode? {
-    guard points.count >= 2 else { return nil }
+  /// The lifts between the strips are millimetres, far below anything here is
+  /// accurate to, and exist only to stop coplanar surfaces flickering against
+  /// each other as the camera moves.
+  private func chevronNode(arms: [PathPoint], walked: Bool, fade: Float) -> SCNNode? {
+    let half = GroundPath.chevronArmM / 2
 
-    let half = GroundPath.widthM / 2
-
-    // Widest first and lifted least, so each strip lies over the one under it.
-    // The lifts are millimetres - far below anything here is accurate to - and
-    // exist only to stop coplanar surfaces flickering against each other as the
-    // camera moves.
     guard
       let halo = strip(
-        along: points,
+        along: arms,
         halfWidth: half + GroundPath.haloWidthM,
-        lift: GroundPath.bandLiftM,
-        vScale: nil
+        lift: GroundPath.bandLiftM
       ),
       let rim = strip(
-        along: points,
+        along: arms,
         halfWidth: half + GroundPath.rimWidthM,
-        lift: GroundPath.bandLiftM + GroundPath.layerLiftM,
-        vScale: nil
+        lift: GroundPath.bandLiftM + GroundPath.layerLiftM
       ),
       let fill = strip(
-        along: points,
+        along: arms,
         halfWidth: half,
-        lift: GroundPath.bandLiftM + GroundPath.layerLiftM * 2,
-        // The fill is the one strip that is textured, so it is the one that
-        // needs the distance running along it. Normalised over the band's whole
-        // length, so the fade spans exactly what is drawn.
-        vScale: .wholeLength
+        lift: GroundPath.bandLiftM + GroundPath.layerLiftM * 2
       )
     else { return nil }
 
@@ -1557,91 +1892,58 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     rim.geometry?.materials = [flatMaterial(UIColor(white: 1, alpha: walked ? 0.4 : 0.85))]
     rim.renderingOrder = -13
 
-    let fillMaterial = flatMaterial(.white)
-    // The colour and the fade arrive together, as a one-pixel-wide ramp sampled
-    // along the band. A texture rather than a per-vertex colour because the
-    // fade has to be smooth between anchors that are more than a metre apart,
-    // and interpolating two vertex colours across that distance banded visibly.
-    fillMaterial.diffuse.contents = walked ? walkedRamp() : fadeRamp()
-    fillMaterial.diffuse.wrapT = .clamp
-    fillMaterial.diffuse.wrapS = .clamp
-    fill.geometry?.materials = [fillMaterial]
+    // The distance fade is now a flat colour per chevron rather than a gradient
+    // painted along the run, which is both simpler and more correct. A chevron is
+    // a single mark at a single distance; fading *within* one would say its near
+    // arm is closer than its far arm, and its arms are side by side.
+    let near = walked ? GroundPath.walkedNearOpacity : GroundPath.nearOpacity
+    let far = walked ? GroundPath.walkedFarOpacity : GroundPath.farOpacity
+    let alpha = near + (far - near) * CGFloat(fade)
+
+    // Grey rather than a dimmed green for ground already covered, because dimming
+    // is already what distance does to the far end of the run - two meanings on
+    // one channel would make a long way ahead read as a way behind.
+    let colour = walked
+      ? UIColor(red: 0.604, green: 0.627, blue: 0.651, alpha: alpha)
+      : UIColor(red: 0.16, green: 0.79, blue: 0.42, alpha: alpha)
+
+    fill.geometry?.materials = [flatMaterial(colour)]
     fill.renderingOrder = -12
 
     let node = SCNNode()
     node.addChildNode(halo)
     node.addChildNode(rim)
     node.addChildNode(fill)
-
-    // The travelling highlight rides on its own copy of the fill, additively
-    // blended. It has to be separate because the two textures want opposite
-    // wrapping: the fade is clamped and spans the band once, while the highlight
-    // repeats every few metres so that its speed is a speed over the ground
-    // rather than a fraction of however much band happens to be drawn.
-    if !walked, let wave = strip(
-      along: points,
-      halfWidth: half,
-      lift: GroundPath.bandLiftM + GroundPath.layerLiftM * 3,
-      // Normalised over the band, not repeating every few metres. Repeating
-      // was the obvious choice - it makes the sweep a speed over the ground -
-      // but it is not what the overlay does, and on a band longer than the
-      // wavelength it puts two highlights on screen at once where the overlay
-      // has one. This renderer is meant to differ from the overlay in exactly
-      // one respect, so everywhere else it follows it.
-      vScale: .wholeLength
-    ) {
-      let waveMaterial = flatMaterial(.white)
-      waveMaterial.diffuse.contents = waveRamp()
-      waveMaterial.diffuse.wrapT = .clamp
-      waveMaterial.diffuse.wrapS = .clamp
-      waveMaterial.blendMode = .add
-      // Driven from the clock each frame rather than by a repeating
-      // `CABasicAnimation`, and that is worth explaining because the animation
-      // was the obvious choice and was wrong.
-      //
-      // An animation belongs to the material, so tearing the node down to
-      // rebuild the geometry restarts it from the beginning. That was tolerable
-      // while the band only changed when a run was added - but it has to be
-      // rebuilt whenever the walked/ahead split moves too, which is every stride.
-      // The sweep would have restarted at walking pace.
-      //
-      // A phase computed from absolute time has no such memory. It picks up
-      // exactly where it left off however often the geometry underneath it is
-      // replaced, which is what lets the split move freely.
-      waveMaterials.append(waveMaterial)
-
-      wave.geometry?.materials = [waveMaterial]
-      wave.renderingOrder = -11
-      node.addChildNode(wave)
-    }
-
-    // Two passes, matching the overlay: a slightly larger dark triangle first,
-    // then the white one over it. The overlay gets this from a 1pt stroke, and a
-    // stroke paints over its own fill - so drawing the edge as a separate shape
-    // underneath is not just the 3D equivalent, it is the shape the stroke was
-    // approximating.
-    if !walked {
-      if let edge = markerNode(
-        along: points,
-        grow: GroundPath.markerEdgeM,
-        color: UIColor(white: 0, alpha: 0.35),
-        lift: GroundPath.bandLiftM + GroundPath.markerLiftM,
-        order: -11
-      ) {
-        node.addChildNode(edge)
-      }
-      if let markers = markerNode(
-        along: points,
-        grow: 0,
-        color: UIColor(white: 1, alpha: 0.92),
-        lift: GroundPath.bandLiftM + GroundPath.markerLiftM + GroundPath.layerLiftM,
-        order: -10
-      ) {
-        node.addChildNode(markers)
-      }
-    }
-
     return node
+  }
+
+  /// One sweep of a centreline at a given half-width, as a triangle strip.
+  private func strip(along points: [PathPoint], halfWidth: Float, lift: Float) -> SCNNode? {
+    var vertices: [SCNVector3] = []
+    let frames = bandFrames(points, halfWidth: halfWidth)
+
+    for (i, point) in points.enumerated() {
+      guard let frame = frames[i] else { continue }
+
+      let raised = point.position + simd_float3(0, lift, 0)
+      let left = raised - frame.offset
+      let right = raised + frame.offset
+      vertices.append(SCNVector3(left.x, left.y, left.z))
+      vertices.append(SCNVector3(right.x, right.y, right.z))
+    }
+
+    guard vertices.count >= 4 else { return nil }
+
+    // A triangle strip, which is what a swept line is: every new pair of vertices
+    // closes two more triangles against the pair before it.
+    let element = SCNGeometryElement(
+      indices: (0..<vertices.count).map { Int32($0) },
+      primitiveType: .triangleStrip
+    )
+
+    return SCNNode(
+      geometry: SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)], elements: [element])
+    )
   }
 
   /// How the band sits at one point on its centreline: which way it runs
@@ -1726,132 +2028,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     return frames
   }
 
-  /// How the texture coordinate running along a strip is scaled.
-  private enum StripMapping {
-    /// 0 at the near end, 1 at the far end, whatever the band's length. What a
-    /// fade that spans the whole band needs.
-    case wholeLength
-    /// One unit per this many metres of ground. What a repeating pattern needs
-    /// if it is to move at a fixed speed rather than at a fixed fraction.
-    case metres(Float)
-  }
-
-  /// One sweep of the centreline at a given half-width, as a triangle strip.
-  ///
-  /// `vScale` of nil skips the texture coordinates entirely - the halo and rim
-  /// are flat colours and have nothing to sample.
-  private func strip(
-    along points: [PathPoint],
-    halfWidth: Float,
-    lift: Float,
-    vScale: StripMapping?
-  ) -> SCNNode? {
-    var vertices: [SCNVector3] = []
-    var centres: [simd_float3] = []
-    let frames = bandFrames(points, halfWidth: halfWidth)
-
-    for (i, point) in points.enumerated() {
-      guard let frame = frames[i] else { continue }
-
-      let raised = point.position + simd_float3(0, lift, 0)
-      let left = raised - frame.offset
-      let right = raised + frame.offset
-      vertices.append(SCNVector3(left.x, left.y, left.z))
-      vertices.append(SCNVector3(right.x, right.y, right.z))
-      centres.append(point.position)
-    }
-
-    guard vertices.count >= 4 else { return nil }
-
-    let source = SCNGeometrySource(vertices: vertices)
-    // A triangle strip, which is what a ribbon is: every new pair of vertices
-    // closes two more triangles against the pair before it.
-    let element = SCNGeometryElement(
-      indices: (0..<vertices.count).map { Int32($0) },
-      primitiveType: .triangleStrip
-    )
-
-    var sources = [source]
-    if let vScale {
-      sources.append(SCNGeometrySource(textureCoordinates: coordinates(along: centres, vScale)))
-    }
-
-    return SCNNode(geometry: SCNGeometry(sources: sources, elements: [element]))
-  }
-
-  /// Texture coordinates for a strip: u across it, v along it.
-  private func coordinates(along centres: [simd_float3], _ vScale: StripMapping) -> [CGPoint] {
-    var travelled: [Float] = [0]
-    for i in 1..<centres.count {
-      travelled.append(travelled[i - 1] + simd_length(centres[i] - centres[i - 1]))
-    }
-
-    let divisor: Float
-    switch vScale {
-    case .wholeLength: divisor = max(travelled.last ?? 1, 0.01)
-    case .metres(let metres): divisor = metres
-    }
-
-    var uv: [CGPoint] = []
-    for distance in travelled {
-      let v = CGFloat(distance / divisor)
-      uv.append(CGPoint(x: 0, y: v))
-      uv.append(CGPoint(x: 1, y: v))
-    }
-    return uv
-  }
-
-  /// The direction triangles, as one geometry rather than one node each.
-  private func markerNode(
-    along points: [PathPoint],
-    grow: Float,
-    color: UIColor,
-    lift: Float,
-    order: Int
-  ) -> SCNNode? {
-    let halfLength = GroundPath.markerLengthM / 2 + grow
-    let halfWidth = GroundPath.markerWidthM / 2 + grow
-
-    var vertices: [SCNVector3] = []
-    // Square to the direction of travel, not mitred. A marker is a shape
-    // lying in the band rather than part of its edge, so leaning it into a
-    // corner would skew the triangle instead of closing a join.
-    let frames = bandFrames(points, halfWidth: halfWidth)
-
-    for (i, point) in points.enumerated() {
-      guard point.marker, let frame = frames[i] else { continue }
-      let centre = point.position
-      let along = frame.along
-      let side = frame.side
-      let raise = simd_float3(0, lift, 0)
-
-      for corner in [
-        centre + along * halfLength + raise,
-        centre - along * halfLength + side * halfWidth + raise,
-        centre - along * halfLength - side * halfWidth + raise,
-      ] {
-        vertices.append(SCNVector3(corner.x, corner.y, corner.z))
-      }
-    }
-
-    guard vertices.count >= 3 else { return nil }
-
-    let geometry = SCNGeometry(
-      sources: [SCNGeometrySource(vertices: vertices)],
-      elements: [
-        SCNGeometryElement(
-          indices: (0..<vertices.count).map { Int32($0) },
-          primitiveType: .triangles
-        )
-      ]
-    )
-    geometry.materials = [flatMaterial(color)]
-
-    let node = SCNNode(geometry: geometry)
-    node.renderingOrder = order
-    return node
-  }
-
   /// A material for a marking on the ground.
   ///
   /// Constant rather than lit, because a marking has no surface normal anyone
@@ -1869,80 +2045,6 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     material.isDoubleSided = true
     material.writesToDepthBuffer = false
     return material
-  }
-
-  /// The band's colour and its distance fade, as a one-pixel-wide ramp.
-  ///
-  /// Cached because it never changes and building it allocates a bitmap.
-  ///
-  /// Drawn top to bottom, and the geometry's v runs 0 at the near end - so the
-  /// *first* stop is the near end. Worth checking on a device before trusting:
-  /// if the band comes out faint at your feet and solid in the distance, these
-  /// two stops are the wrong way round and swapping them is the whole fix.
-  /// The same ramp for ground already covered: grey, and fainter at both ends.
-  /// Grey rather than a dimmed green, because dimming is already what distance
-  /// does to the far end of the live band - two meanings on one channel would
-  /// make a long route ahead read as a route behind.
-  private func walkedRamp() -> UIImage? {
-    if let cachedWalked { return cachedWalked }
-    let grey = UIColor(red: 0.604, green: 0.627, blue: 0.651, alpha: 1)
-    cachedWalked = ramp(stops: [
-      grey.withAlphaComponent(GroundPath.walkedNearOpacity),
-      grey.withAlphaComponent(GroundPath.walkedFarOpacity),
-    ])
-    return cachedWalked
-  }
-
-  private func fadeRamp() -> UIImage? {
-    if let cachedFade { return cachedFade }
-    let green = UIColor(red: 0.16, green: 0.79, blue: 0.42, alpha: 1)
-    cachedFade = ramp(stops: [
-      green.withAlphaComponent(GroundPath.nearOpacity),
-      green.withAlphaComponent(GroundPath.farOpacity),
-    ])
-    return cachedFade
-  }
-
-  /// One pass of the travelling highlight: a soft bright band over transparent
-  /// black, repeating along the strip.
-  ///
-  /// Black rather than clear at the ends because this is added, not blended -
-  /// and adding black is what "leave this pixel alone" means.
-  private func waveRamp() -> UIImage? {
-    if let cachedWave { return cachedWave }
-    let lift = GroundPath.waveStrength
-    let half = CGFloat(GroundPath.wavePulseHalfWidth)
-    cachedWave = ramp(stops: [
-      UIColor(white: 0, alpha: 1),
-      UIColor(white: lift, alpha: 1),
-      UIColor(white: 0, alpha: 1),
-      UIColor(white: 0, alpha: 1),
-    ], locations: [0, half, half * 2, 1])
-    return cachedWave
-  }
-
-  private func ramp(stops: [UIColor], locations: [CGFloat]? = nil) -> UIImage? {
-    let size = CGSize(width: 1, height: 256)
-    let format = UIGraphicsImageRendererFormat.default()
-    format.scale = 1
-    format.opaque = false
-
-    return UIGraphicsImageRenderer(size: size, format: format).image { context in
-      guard
-        let gradient = CGGradient(
-          colorsSpace: CGColorSpaceCreateDeviceRGB(),
-          colors: stops.map { $0.cgColor } as CFArray,
-          locations: locations
-        )
-      else { return }
-
-      context.cgContext.drawLinearGradient(
-        gradient,
-        start: CGPoint(x: 0, y: 0),
-        end: CGPoint(x: 0, y: size.height),
-        options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-      )
-    }
   }
 
   /// Whether the floor has been found well enough to put something on it, and

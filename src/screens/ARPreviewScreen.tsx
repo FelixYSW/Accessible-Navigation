@@ -18,7 +18,7 @@ import {
 } from '../components/maneuverIcons';
 import { ARScanOverlay } from '../components/ARScanOverlay';
 import { CameraStage } from '../components/CameraStage';
-import { DestinationPin } from '../components/DestinationPin';
+import { DestinationLabel } from '../components/DestinationLabel';
 import { useSettings } from '../theme/SettingsContext';
 import { OVERLAY_PILL_HEIGHT, OVERLAY_RED, RADIUS, SCREEN_MARGIN } from '../theme/tokens';
 
@@ -108,6 +108,11 @@ export function ARPreviewScreen({ navigation }: Props) {
     <ARGeospatialView
       style={StyleSheet.absoluteFill}
       previewMode
+      // The narrowest the chevrons go, because in here the precision really is
+      // perfect: the guidance is standing where it was tapped. Widening it on a
+      // route is a statement about the route data, and there is no route data
+      // in a preview to be unsure about.
+      guidanceWidthM={3}
       previewComponent={component}
       previewClearToken={clearToken}
       onAnchorsUpdate={handleAnchorsUpdate}
@@ -117,7 +122,7 @@ export function ARPreviewScreen({ navigation }: Props) {
 
   return (
     <CameraStage isActive surface={surface}>
-      <DestinationPin anchors={anchors} label="Destination" />
+      <DestinationLabel anchors={anchors} label="Destination" />
 
       {/* Over the guidance and under the controls: it is telling the user the
           screen is not ready yet, so it must cover what is not ready without

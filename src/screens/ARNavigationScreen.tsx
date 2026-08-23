@@ -30,7 +30,7 @@ import { useSpokenHazardCues, useSpokenTurnCues } from '../services/voiceCues';
 import { AppIcon } from '../components/AppIcon';
 import { CameraStage } from '../components/CameraStage';
 import { DEFAULT_CAMERA_PITCH_DEG, GroundArrows } from '../components/GroundArrows';
-import { DestinationPin } from '../components/DestinationPin';
+import { DestinationLabel } from '../components/DestinationLabel';
 import {
   MANEUVER_ICONS,
   MANEUVER_LABELS,
@@ -72,21 +72,23 @@ const BANNER_TOP_GAP = 4;
 // that meant the path could start three and a half metres off, which
 // reads as the run starting somewhere up the street rather than at your feet.
 //
-// The horizon is set by what a flat shape on the ground can still say, not by
-// how far ahead the route is known. Past about eight metres a band lying on the
-// pavement has narrowed to a few points of screen - still drawn, still fading,
-// still costing two projections a frame, and no longer saying anything about
-// direction that the nearer half has not said already. The compass-drawn
-// fallback is cut at six for the same reason.
-// There is deliberately no lead distance any more. A gap used to be left around
-// the walker, on the reasoning that a chevron under your own feet is not
-// guidance - true of a chevron, and wrong for a band, which is one shape and now
-// has to run continuously *through* where they are standing. That is where the
-// live half and the covered half meet, and a hole there would show as the band
-// breaking apart around them. Points that end up genuinely underfoot are dealt
-// with where they should be, by the near-plane clip on the native side.
-const ANCHOR_SPACING_M = 1.2;
-const ANCHOR_HORIZON_M = 8;
+// Both figures were set for a continuous band and are wrong for chevrons.
+//
+// The spacing was fine enough to draw a smooth curve, because a band is a
+// curve. Chevrons need only a position and a heading every few metres, so two
+// metres is plenty - and it takes the heading at each one from points four
+// metres apart, which is steadier than a stride-length leg could ever be.
+//
+// The horizon was eight metres because past that a band ninety centimetres
+// across had narrowed to a few points of screen. A chevron several metres wide
+// is still perfectly legible at twenty, and with one every eight metres a
+// short horizon would put barely one on screen. Twenty-four gives three ahead,
+// which is what makes a run of them read as a direction rather than as a mark.
+//
+// The anchor count comes out about where it was - sixteen against fourteen -
+// so this buys the extra reach for nothing.
+const ANCHOR_SPACING_M = 2;
+const ANCHOR_HORIZON_M = 24;
 
 // How far *behind* the walker's position along the route to keep anchoring.
 //
@@ -113,11 +115,53 @@ const ANCHOR_LOOKBACK_M = 8;
 // the walker's own offset from that line puts it back on the pavement they are
 // standing on.
 //
-// Capped, because past a few metres the offset stops meaning "which side of the
-// road" and starts meaning "not on this road at all" - and then the honest
-// thing is to draw the real route and let them walk back to it.
-const MAX_PATH_OFFSET_M = 8;
+// Two limits, not one, and the difference between them is the whole point.
+//
+// Up to MAX_PATH_OFFSET_M the reading means "the other side of this road" and
+// the run is shifted by it. Past OFF_ROUTE_M it means "not on this road at
+// all" - the walker has wandered off, or the fix has - and the honest answer
+// is the real route, drawn where it really is, so they can walk back to it.
+// Between the two it is clamped, not discarded.
+//
+// That distinction was the bug. There was one limit at eight metres, and
+// beyond it the reading was replaced by *zero* rather than clamped - which is
+// not "I am unsure", it is the positive statement "you are standing on the
+// route line". A road in the study area is comfortably wider than eight metres
+// once both pavements and a row of parked cars are counted, so a walker on the
+// far pavement measured nine or twelve metres out, the correction switched
+// itself off, and the band was drawn confidently down the middle of the road
+// or on the opposite kerb. The correction failed in exactly the case it exists
+// for.
+//
+// Sixteen metres is what the anchor ids already encode - see
+// OFFSET_HALF_METRES, which has always allowed thirty-two half-metres either
+// way - so this is raising a limit to the one the rest of the code was already
+// built for, not inventing headroom.
+const MAX_PATH_OFFSET_M = 16;
+const OFF_ROUTE_M = 26;
 const OFFSET_DEADBAND_M = 1.5;
+
+// How wide the chevrons are drawn, in metres.
+//
+// The rule is one sentence: wide enough to reach from where the map says the
+// route is to where the walker actually is. Half a chevron's width has to
+// cover what is left over after the sideways correction has done what it can,
+// plus whatever the pose admits it might be wrong by.
+//
+// That is the honest answer to "how wide is the road", which is the question
+// this looks like it is asking and cannot be. Road width is not in the routing
+// response, OSM rarely tags it in the study area, and ARKit only knows about
+// the flat ground it has already scanned. But the app does not actually need
+// the road's width - it needs to not be pointing at the wrong side of it, and
+// a chevron that spans from the route line to the walker cannot be, because
+// the walker is standing inside it.
+//
+// It also tightens itself. When the correction locks on and the run comes over
+// to the pavement underfoot, the leftover shrinks and the chevron narrows to
+// the floor - so on a footpath where the route line is right, this says so.
+const MIN_GUIDANCE_WIDTH_M = 3;
+const MAX_GUIDANCE_WIDTH_M = 14;
+const GUIDANCE_WIDTH_STEP_M = 1;
 
 // How much of each new reading the offset takes, and how big it has to get
 // before it is believed at all.
@@ -203,6 +247,20 @@ function offsetKeyFor(lateralMeters: number): number {
 // which is the better failure of the two.
 const TRUST_ANCHORS_ACCURACY_M = 3;
 const TRUST_ANCHORS_HEADING_DEG = 15;
+
+// How close to the destination counts as having got there.
+//
+// Ten metres, which is wider than it sounds and deliberately so. The fix is
+// good to about a metre once localised, but the destination coordinate itself
+// is whatever the geocoder returned for the place - the centre of a building,
+// a point on the road outside it - and that is routinely five to ten metres
+// from the door a walker would call arriving. Waiting for a smaller radius
+// would mean the route never ended at some destinations at all.
+//
+// The cost of being generous is announcing arrival from across a forecourt.
+// The cost of being strict is a walker standing on the spot being told they
+// have thirty metres to go, which is what actually happened.
+const ARRIVAL_RADIUS_M = 10;
 
 // And when to stop trusting it - deliberately worse than the figures above
 // rather than equal to them.
@@ -380,14 +438,23 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // Fed by the AR view below, which runs the same model over ARKit's frames.
   const { detections, onHazards } = useHazardDetections(guiding, activeClasses);
 
-  // Where the anchors are measured from.
+  // Where the walker is, as everything on this screen measures it.
   //
   // The AR session's own fix, not the phone's, whenever it is trustworthy. This
-  // is the single most important line for how the path looks: ARCore
-  // localises to well under a metre where the GPS fix is five to ten, and since
-  // the run is laid out relative to where the walker is, a fix that says they
-  // are eight metres back puts the whole run eight metres too far up the road.
-  const anchorOrigin = useMemo<LatLng | null>(
+  // is the single most important line for how the path looks: ARCore localises
+  // to well under a metre where the GPS fix is five to ten, and since the run is
+  // laid out relative to where the walker is, a fix that says they are eight
+  // metres back puts the whole run eight metres too far up the road.
+  //
+  // It feeds the numbers as well as the geometry, which it did not used to, and
+  // that was a real bug rather than an inelegance. The band and the pin were
+  // placed from this fix while every distance, every step, the progress bar and
+  // the spoken cues were computed from the phone's raw GPS. So the screen could
+  // - and did - draw the destination pin at the walker's feet while the panel
+  // above it counted down fifty metres to a turn and the sheet below claimed
+  // thirty-one metres remaining. Two answers to "where am I", disagreeing by the
+  // width of the error in the worse one.
+  const fix = useMemo<LatLng | null>(
     () =>
       anchorsTrusted && geospatial
         ? { latitude: geospatial.latitude, longitude: geospatial.longitude }
@@ -405,16 +472,22 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // fix to change a number nothing is reading yet.
   const smoothedOffset = useRef(0);
   const [pathOffset, setPathOffset] = useState(0);
+  const [guidanceWidth, setGuidanceWidth] = useState(MIN_GUIDANCE_WIDTH_M);
 
   useEffect(() => {
-    if (!anchorOrigin) return;
+    if (!fix) return;
 
-    const measured = lateralOffsetFromRoute(walkingRoute.coordinates, anchorOrigin);
+    const measured = lateralOffsetFromRoute(walkingRoute.coordinates, fix);
     if (measured === undefined) return;
 
-    // Past the cap this has stopped meaning "the other pavement" and started
-    // meaning "not on this road", and the honest answer then is the real route.
-    const sample = Math.abs(measured) <= MAX_PATH_OFFSET_M ? measured : 0;
+    // Clamped, and only discarded once it has stopped being about this road at
+    // all. Clamping says "you are at least this far off", which is true and errs
+    // towards the walker; discarding says "you are on the line", which is a
+    // confident statement about the wrong pavement.
+    const sample =
+      Math.abs(measured) > OFF_ROUTE_M
+        ? 0
+        : Math.max(-MAX_PATH_OFFSET_M, Math.min(MAX_PATH_OFFSET_M, measured));
 
     smoothedOffset.current += (sample - smoothedOffset.current) * OFFSET_SMOOTHING;
 
@@ -438,7 +511,21 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       // occasions it is warranted.
       return Math.round(target * 2) / 2;
     });
-  }, [walkingRoute.coordinates, anchorOrigin, anchorsTrusted, geospatial]);
+
+    // What the correction could not take out, plus what the pose admits it
+    // might be wrong by. Doubled because the chevron is centred on the route
+    // line and only half of it reaches towards the walker.
+    const leftover = Math.abs(measured - target) + uncertainty;
+    const wanted = Math.min(
+      MAX_GUIDANCE_WIDTH_M,
+      Math.max(MIN_GUIDANCE_WIDTH_M, leftover * 2),
+    );
+    setGuidanceWidth((current) =>
+      Math.abs(wanted - current) < GUIDANCE_WIDTH_STEP_M
+        ? current
+        : Math.round(wanted),
+    );
+  }, [walkingRoute.coordinates, fix, anchorsTrusted, geospatial]);
 
   // The route points to anchor, as a fixed lattice measured from the start of
   // the route rather than from the walker.
@@ -450,9 +537,9 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // start, a point keeps its id for the whole walk; advancing simply drops one
   // off the back of the window and adds one at the front.
   const routeAnchors = useMemo<GeoAnchor[]>(() => {
-    if (!anchorOrigin) return [];
+    if (!fix) return [];
 
-    const along = distanceAlongRoute(walkingRoute.coordinates, anchorOrigin);
+    const along = distanceAlongRoute(walkingRoute.coordinates, fix);
     const first = Math.ceil((along - ANCHOR_LOOKBACK_M) / ANCHOR_SPACING_M);
     const last = Math.floor((along + ANCHOR_HORIZON_M) / ANCHOR_SPACING_M);
     const shift = offsetKeyFor(pathOffset) * OFFSET_ID_STRIDE;
@@ -475,7 +562,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     // authority. Anchored on its true coordinate with no pavement shift: the
     // the band is shifted because a route line is a rough guide to which side
     // of the road to walk on, but the destination is an actual place.
-    if (distanceMeters(anchorOrigin, walkingRoute.destination) <= DESTINATION_ANCHOR_RANGE_M) {
+    if (distanceMeters(fix, walkingRoute.destination) <= DESTINATION_ANCHOR_RANGE_M) {
       planted.push({
         id: DESTINATION_ANCHOR_ID,
         kind: 'destination',
@@ -485,7 +572,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
     }
 
     return planted;
-  }, [walkingRoute.coordinates, walkingRoute.destination, anchorOrigin, pathOffset]);
+  }, [walkingRoute.coordinates, walkingRoute.destination, fix, pathOffset]);
 
   // Two directions matter, not one: the way the route runs from here to the
   // next point, and the way it runs after that point. The first is where the
@@ -496,21 +583,20 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // reports anchor positions every frame, so this component now renders at the
   // camera's rate, and both of these walk the whole route polyline.
   const targetIndex = useMemo(
-    () =>
-      position !== null ? nextRoutePointIndex(walkingRoute.coordinates, position) : undefined,
-    [walkingRoute.coordinates, position],
+    () => (fix !== null ? nextRoutePointIndex(walkingRoute.coordinates, fix) : undefined),
+    [walkingRoute.coordinates, fix],
   );
   const target = targetIndex !== undefined ? walkingRoute.coordinates[targetIndex] : undefined;
 
   const bearingToNext =
-    position && target ? relativeBearing(heading, bearingBetween(position, target)) : undefined;
+    fix && target ? relativeBearing(heading, bearingBetween(fix, target)) : undefined;
   const onwardBearing =
     targetIndex !== undefined
       ? routeBearingAfter(walkingRoute.coordinates, targetIndex)
       : undefined;
   const bearingAfterNext =
     onwardBearing !== undefined ? relativeBearing(heading, onwardBearing) : undefined;
-  const metersToTarget = position && target ? distanceMeters(position, target) : undefined;
+  const metersToTarget = fix && target ? distanceMeters(fix, target) : undefined;
 
   // The change of direction *across* the next point - not where that point
   // happens to lie relative to the walker's shoulders. `relativeBearing(a, b)`
@@ -526,14 +612,14 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // what a walker wants is the distance to the actual manoeuvre and the name
   // of the street it puts them on.
   const stepIndex = useMemo(
-    () => (position ? currentStepIndex(walkingRoute, position) : undefined),
-    [walkingRoute, position],
+    () => (fix ? currentStepIndex(walkingRoute, fix) : undefined),
+    [walkingRoute, fix],
   );
   const step = stepIndex !== undefined ? walkingRoute.steps[stepIndex] : undefined;
   const nextStep = stepIndex !== undefined ? walkingRoute.steps[stepIndex + 1] : undefined;
 
   const metersToManeuver =
-    position && step ? distanceMeters(position, step.end) : metersToTarget;
+    fix && step ? distanceMeters(fix, step.end) : metersToTarget;
 
   // Measured between the two legs' own end-to-end directions, so it describes
   // the manoeuvre the distance above is counting down to, rather than whatever
@@ -548,11 +634,36 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   const turnAngle = stepTurn ?? vertexTurn;
 
-  // Which of the fixed banner glyphs to show. The API's own code wins where
-  // there is one; the measured angle covers routes without them; and once
-  // there is no step left to turn into, the manoeuvre is arriving.
+  // How far the walker still is from the destination itself, in a straight
+  // line - not what is left of the route.
+  //
+  // Those come apart exactly where it matters. Remaining route distance is
+  // measured by projecting onto the polyline, and a walker standing beside the
+  // last few metres of it, or one whose route was drawn down the middle of the
+  // road, can be at the door with metres of line still unprojected. Straight
+  // line to the destination is the question actually being asked: am I there?
+  const metersToDestination = fix ? distanceMeters(fix, walkingRoute.destination) : undefined;
+
+  // Latched: once arrived, arrived.
+  //
+  // A fix wobbling either side of the radius would otherwise flip the screen
+  // between "Arrived" and "31 m remaining" every second or two, which is worse
+  // than either message on its own - it reads as the app not knowing, at the
+  // one moment the walker needs it to be sure. Walking away afterwards does not
+  // un-arrive them; the route is over, and End is right there.
+  const [arrived, setArrived] = useState(false);
+  useEffect(() => {
+    if (metersToDestination !== undefined && metersToDestination <= ARRIVAL_RADIUS_M) {
+      setArrived(true);
+    }
+  }, [metersToDestination]);
+
+  // Which of the fixed banner glyphs to show. Arrival wins outright; then the
+  // API's own code where there is one; the measured angle covers routes without
+  // them; and once there is no step left to turn into, the manoeuvre is
+  // arriving anyway.
   const maneuver: Maneuver =
-    step && !nextStep
+    arrived || (step && !nextStep)
       ? 'arrive'
       : (maneuverFromApi(nextStep?.maneuver) ?? maneuverFromAngle(turnAngle));
   const maneuverIcon = MANEUVER_ICONS[maneuver];
@@ -577,13 +688,19 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   // than one depending on the other staying empty.
   useSpokenHazardCues(hazardCues && guiding, detections);
 
-  const progress = useTripProgress(walkingRoute, position);
+  const progress = useTripProgress(walkingRoute, fix);
   const remainingMeters = walkingRoute.distanceMeters * (1 - progress);
   // Rescaled to the pace implied by the Mobility aid setting, so the time
   // left here matches the estimate the user chose this route on.
   const remainingSeconds =
     routeDurationSeconds(walkingRoute.durationSeconds, mobilityAid, walkingRoute.accessibleFor) *
     (1 - progress);
+
+  // The bar is filled on arrival whatever the projection says. It is measured
+  // along the route line, and a walker standing at the door can still leave a
+  // few metres of that line unaccounted for - which would show as a bar stuck
+  // just short of full under the word "Arrived".
+  const shownProgress = arrived ? 1 : progress;
 
   const exit = () => navigation.goBack();
 
@@ -595,6 +712,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       style={StyleSheet.absoluteFill}
       apiKey={GOOGLE_MAPS_API_KEY}
       anchors={routeAnchors}
+      guidanceWidthM={guidanceWidth}
       onGeospatialUpdate={handleGeospatialUpdate}
       onAnchorsUpdate={handleAnchorsUpdate}
       onHazards={onHazards}
@@ -603,14 +721,18 @@ export function ARNavigationScreen({ route, navigation }: Props) {
 
   return (
     <CameraStage isActive surface={surface}>
-      {/* The anchored band is not on this layer any more, and that is the
-          whole change: it is geometry inside the AR scene, drawn by
-          ARGeospatialView above, in the same pass as the camera image it lies
-          on. An overlay could only ever be drawn for a pose the phone had
-          already left, which is what made it slide; and being painted over the
-          top of everything, nothing in the street could hide it. What stays
-          here is the pin, which is a sprite by design - a destination marker
-          has to face the walker from every approach.
+      {/* Neither the band nor the pin is on this layer any more. Both are
+          geometry inside the AR scene, drawn by ARGeospatialView above in the
+          same pass as the camera image they sit on. An overlay could only ever
+          be drawn for a pose the phone had already left, which is what made it
+          slide; and being painted over the top of everything, nothing in the
+          street could hide either of them.
+
+          What stays here is the destination's *name*, and that split is the
+          point rather than a leftover. A label drawn in the scene would shrink
+          with distance and be unreadable exactly when the walker most wants to
+          know which doorway is meant. The pin is an object and belongs in the
+          world; its name is interface and belongs on the glass.
 
           Still one band or the other and never both. The compass run below
           draws the same route from a different source, and the two together
@@ -623,7 +745,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           at the same moment this is drawn. Adding the condition would read as
           a case that can happen. */}
       {anchorsTrusted && (
-        <DestinationPin
+        <DestinationLabel
           anchors={projectedAnchors}
           label={walkingRoute.destinationName}
         />
@@ -678,13 +800,21 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       >
         <AppIcon name={maneuverIcon} size={scaled(46)} color="#fff" />
         <View style={styles.bannerText}>
+          {/* Arrival replaces the countdown rather than sitting under it. A
+              distance to the next manoeuvre is an instruction to keep walking,
+              and leaving one up at the destination is how the walker ends up
+              standing on the spot being told to carry on. */}
           <Text style={[styles.bannerDistance, { fontSize: F.h1 }]} numberOfLines={1}>
-            {metersToManeuver !== undefined ? formatDistance(metersToManeuver) : '—'}
+            {arrived
+              ? 'Arrived'
+              : metersToManeuver !== undefined
+                ? formatDistance(metersToManeuver)
+                : '—'}
           </Text>
           <Text style={[styles.bannerRoad, { fontSize: F.h2 }]} numberOfLines={1}>
-            {road ?? MANEUVER_LABELS[maneuver]}
+            {arrived ? walkingRoute.destinationName : (road ?? MANEUVER_LABELS[maneuver])}
           </Text>
-          {road && (
+          {!arrived && road && (
             <Text style={[styles.bannerToward, { fontSize: F.sm }]} numberOfLines={1}>
               {MANEUVER_LABELS[maneuver]}
             </Text>
@@ -704,12 +834,16 @@ export function ARNavigationScreen({ route, navigation }: Props) {
           cannot see a fill at all. */}
       <View
         style={[styles.sheet, { bottom: insets.bottom > 0 ? insets.bottom : 32 }]}
-        accessibilityValue={{ text: `${Math.round(progress * 100)} percent of the route walked` }}
+        accessibilityValue={{
+          text: arrived
+            ? 'Arrived at the destination'
+            : `${Math.round(shownProgress * 100)} percent of the route walked`,
+        }}
       >
         <View
           style={[
             styles.sheetFill,
-            { backgroundColor: OVERLAY_GREEN, width: `${Math.round(progress * 100)}%` },
+            { backgroundColor: OVERLAY_GREEN, width: `${Math.round(shownProgress * 100)}%` },
           ]}
         />
         <View style={styles.sheetRow}>
@@ -718,7 +852,9 @@ export function ARNavigationScreen({ route, navigation }: Props) {
               {walkingRoute.destinationName}
             </Text>
             <Text style={[styles.remaining, { fontSize: F.tinySm }]} numberOfLines={1}>
-              {formatDuration(remainingSeconds)} · {formatDistance(remainingMeters)} remaining
+              {arrived
+                ? 'You have arrived'
+                : `${formatDuration(remainingSeconds)} · ${formatDistance(remainingMeters)} remaining`}
             </Text>
           </View>
           <Pressable
@@ -735,40 +871,34 @@ export function ARNavigationScreen({ route, navigation }: Props) {
   );
 }
 
-// How far along the route the walker is, as a 0-1 fraction. Measured by
-// walked distance rather than vertex index: polyline vertices bunch up around
-// corners, so counting them would make the remaining distance jump backwards
-// and forwards as the walker rounds a bend. Falls back to 0 until the first
-// location fix arrives.
+// How far along the route the walker is, as a 0-1 fraction. Falls back to 0
+// until the first fix arrives.
+//
+// Measured by projecting onto the route line, which is what `distanceAlongRoute`
+// does and what this used to do for itself, badly. It snapped to the nearest
+// *vertex* and took the cumulative distance to it - so a walker standing between
+// two vertices was credited with reaching whichever was nearer, including the
+// one still ahead of them. That reads as having walked further than you have,
+// and it is how the sheet came to claim thirty-one metres remaining while the
+// banner above it counted fifty-two to the next manoeuvre: a straight line to a
+// point on the route cannot be longer than the route left to reach it, so the
+// pair of numbers was not merely odd, it was impossible.
 function useTripProgress(
   walkingRoute: { coordinates: LatLng[] },
-  position: LatLng | null,
+  fix: LatLng | null,
 ): number {
   return useMemo(() => {
     const { coordinates } = walkingRoute;
-    if (!position || coordinates.length < 2) return 0;
+    if (!fix || coordinates.length < 2) return 0;
 
-    // Cumulative distance to each vertex, and which vertex the walker is
-    // nearest to, in one pass.
-    let travelled = 0;
     let total = 0;
-    let nearestDistance = Infinity;
-
     for (let i = 1; i < coordinates.length; i += 1) {
-      const toHere = distanceMeters(position, coordinates[i - 1]);
-      if (toHere < nearestDistance) {
-        nearestDistance = toHere;
-        travelled = total;
-      }
       total += distanceMeters(coordinates[i - 1], coordinates[i]);
     }
-    if (distanceMeters(position, coordinates[coordinates.length - 1]) < nearestDistance) {
-      travelled = total;
-    }
-
     if (total === 0) return 0;
-    return Math.min(1, Math.max(0, travelled / total));
-  }, [walkingRoute, position]);
+
+    return Math.min(1, Math.max(0, distanceAlongRoute(coordinates, fix) / total));
+  }, [walkingRoute, fix]);
 }
 
 // Which step of the directions the walker is currently on - the leg whose end
