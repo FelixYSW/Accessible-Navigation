@@ -253,9 +253,10 @@ enum GroundPath {
   ///
   /// The overlay draws an 8pt dark halo and a 2pt white rim around the band. A
   /// stroke is a screen-space width and there is no such thing in a 3D scene, so
-  /// these are the same idea in metres: the centreline swept wider and drawn
-  /// underneath. Chosen to match what those strokes subtend at about three
-  /// metres, which is where most of the band a walker reads actually sits.
+  /// these are the same idea in metres, measured outwards from the edge of the
+  /// mark: the rim takes the first 45mm and the halo the 55mm beyond it. Chosen
+  /// to match what those strokes subtend at about three metres, which is where
+  /// most of the guidance a walker reads actually sits.
   static let haloWidthM: Float = 0.1
   static let rimWidthM: Float = 0.045
 
@@ -299,8 +300,14 @@ enum GroundPath {
   /// With the rim drawn as a ring, the green now lands on the ground and reads as
   /// green, so it can afford to be seen. Still a tint - you can read the paving
   /// through it - and the outline still carries the shape.
-  static let nearOpacity: CGFloat = 0.3
-  static let farOpacity: CGFloat = 0.2
+  ///
+  /// The last nudge up came with the fill turning a purer green. Alpha and
+  /// saturation both make a tint look stronger and are not interchangeable: alpha
+  /// decides how much pavement survives, saturation only decides what colour the
+  /// part that does not survive is. So the chroma did most of that work and this
+  /// moved by a little, which is what keeps the ground readable.
+  static let nearOpacity: CGFloat = 0.4
+  static let farOpacity: CGFloat = 0.28
 
   /// Ground already covered.
   static let walkedNearOpacity: CGFloat = 0.3
@@ -1970,14 +1977,14 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     return nodes
   }
 
-  /// One chevron: three concentric strips laid on the ground, widest first.
+  /// One chevron: a tinted fill inside two rings, laid on the ground.
   ///
-  /// Three strips because a 3D renderer has no equivalent of a stroke. The dark
-  /// halo and the bright rim are not decoration - they are what keeps the shape
-  /// legible against pale concrete and dark wet asphalt alike, since any single
-  /// outline colour disappears against one of them.
+  /// Rings because a 3D renderer has no equivalent of a stroke. The dark halo and
+  /// the bright rim are not decoration - they are what keeps the shape legible
+  /// against pale concrete and dark wet asphalt alike, since any single outline
+  /// colour disappears against one of them.
   ///
-  /// The lifts between the strips are millimetres, far below anything here is
+  /// The lifts between the layers are millimetres, far below anything here is
   /// accurate to, and exist only to stop coplanar surfaces flickering against
   /// each other as the camera moves.
   private func chevronNode(arms: [PathPoint], walked: Bool, fade: Float) -> SCNNode? {
@@ -1993,47 +2000,65 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
     let node = SCNNode()
 
-    // The halo and the rim are drawn as *rings* - a strip down each side with
-    // nothing between them - rather than as wider strips stacked under the fill.
+    // The outline goes all the way round the mark: both long edges *and* the two
+    // blunt ends where the arms of the V stop.
     //
-    // This is the whole reason the fill came out white. Stacked, the rim was a
-    // solid white strip running the full width of the mark, and the green was
-    // composited on top of *that* instead of on top of the pavement. A tint over
-    // opaque white is a pale tint of white, so the more transparent the green was
-    // made the whiter it went - which is the opposite of what lowering an alpha
-    // is supposed to do, and should have been the clue that the fill was never
+    // It used to be a strip down each side and nothing across the ends, which was
+    // the natural thing to build - a sweep has two edges, and they are the two
+    // sides - and it left every chevron open at both tips. Seen from behind, which
+    // is the only way a walker ever sees one, the arms read as bars that had been
+    // sliced off rather than as a shape that finishes.
+    //
+    // So the outline is built from the fill's *perimeter* instead of from its
+    // sweep. The perimeter is a closed loop - down the left edge, across the end,
+    // back along the right, across the start - and pushing that loop outwards
+    // gives a ring that closes. The ends come out square, which is right: a mitre
+    // would put a point on an arm that is not going anywhere.
+    //
+    // Each ring is offset from the one inside it rather than from the fill, so the
+    // halo starts exactly where the rim stops. Offsetting preserves angles, so all
+    // three boundaries mitre identically and stay parallel round the point of the
+    // V.
+    //
+    // Rings, not stacked strips, and that part is load-bearing: it is why the fill
+    // is green at all. Stacked, the rim was a solid white strip running the full
+    // width of the mark, and the green was composited over *that* instead of over
+    // the pavement. A tint over opaque white is a pale tint of white, so the more
+    // transparent the green was made the whiter it went - the opposite of what
+    // lowering an alpha is supposed to do, and the clue that the fill was never
     // the problem.
-    //
-    // Rings cost one more strip per layer and nothing else. The mark is the same
-    // width it was; what changed is that the middle of it is now empty.
-    let haloColour = UIColor(
-      white: 0,
-      alpha: walked ? GroundPath.walkedHaloOpacity : GroundPath.haloOpacity
-    )
-    for edge in outlineStrips(
-      along: arms,
-      inner: half + GroundPath.rimWidthM,
-      outer: half + GroundPath.haloWidthM,
-      lift: GroundPath.bandLiftM
-    ) {
-      edge.geometry?.materials = [flatMaterial(haloColour)]
-      edge.renderingOrder = -14
-      node.addChildNode(edge)
+    let fillEdge = outlineLoop(along: arms, halfWidth: half)
+    let rimEdge = expand(fillEdge, by: GroundPath.rimWidthM)
+    let haloEdge = expand(rimEdge, by: GroundPath.haloWidthM - GroundPath.rimWidthM)
+
+    if let halo = ringNode(between: rimEdge, and: haloEdge, lift: GroundPath.bandLiftM) {
+      halo.geometry?.materials = [
+        flatMaterial(
+          UIColor(
+            white: 0,
+            alpha: walked ? GroundPath.walkedHaloOpacity : GroundPath.haloOpacity
+          )
+        )
+      ]
+      halo.renderingOrder = -14
+      node.addChildNode(halo)
     }
 
-    let rimColour = UIColor(
-      white: 1,
-      alpha: walked ? GroundPath.walkedRimOpacity : GroundPath.rimOpacity
-    )
-    for edge in outlineStrips(
-      along: arms,
-      inner: half,
-      outer: half + GroundPath.rimWidthM,
+    if let rim = ringNode(
+      between: fillEdge,
+      and: rimEdge,
       lift: GroundPath.bandLiftM + GroundPath.layerLiftM
     ) {
-      edge.geometry?.materials = [flatMaterial(rimColour)]
-      edge.renderingOrder = -13
-      node.addChildNode(edge)
+      rim.geometry?.materials = [
+        flatMaterial(
+          UIColor(
+            white: 1,
+            alpha: walked ? GroundPath.walkedRimOpacity : GroundPath.rimOpacity
+          )
+        )
+      ]
+      rim.renderingOrder = -13
+      node.addChildNode(rim)
     }
 
     // The distance fade is now a flat colour per chevron rather than a gradient
@@ -2052,9 +2077,15 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // Grey rather than a dimmed green for ground already covered, because dimming
     // is already what distance does to the far end of the run - two meanings on
     // one channel would make a long way ahead read as a way behind.
+    // A purer green than the app's own, which is where this started. The brand
+    // green carries enough blue to sit near mint, and mint laid this thinly over
+    // grey concrete is barely a colour at all - it reads as the pavement being
+    // lightened rather than as green paint on it. Draining the blue and most of
+    // the red leaves a hue that survives being transparent, which is the only way
+    // to look greener without covering more ground.
     let colour = walked
       ? UIColor(red: 0.604, green: 0.627, blue: 0.651, alpha: alpha)
-      : UIColor(red: 0.16, green: 0.79, blue: 0.42, alpha: alpha)
+      : UIColor(red: 0.05, green: 0.85, blue: 0.30, alpha: alpha)
 
     fill.geometry?.materials = [flatMaterial(colour)]
     fill.renderingOrder = -12
@@ -2081,46 +2112,104 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     return stripNode(from: vertices)
   }
 
-  /// The two edges of a sweep, as a pair of strips with nothing between them.
+  /// The closed boundary of a sweep: down the left edge, across the end, back
+  /// along the right edge, and across the start to meet itself.
   ///
-  /// What an outline actually is, as against what stacking a wider strip
-  /// underneath a narrower one approximates. The difference only shows when the
-  /// thing on top is transparent - and the thing on top here is a tint over a
-  /// pavement, so it shows badly.
-  private func outlineStrips(
-    along points: [PathPoint],
-    inner: Float,
-    outer: Float,
-    lift: Float
-  ) -> [SCNNode] {
-    // One frame set at unit width serves both edges. The mitre reach depends on
-    // the angle at each vertex and not on how far out the edge is, so the unit
-    // offset scales to any width - which also guarantees the rim and the halo
-    // mitre identically and stay parallel round the point of the V.
-    let frames = bandFrames(points, halfWidth: 1)
+  /// The outline of a shape, as against the two edges of the stroke that drew it.
+  /// The difference is the two ends, and the ends are what a walker looking down
+  /// the length of a chevron actually sees.
+  private func outlineLoop(along points: [PathPoint], halfWidth: Float) -> [simd_float3] {
+    let frames = bandFrames(points, halfWidth: halfWidth)
 
-    var left: [SCNVector3] = []
-    var right: [SCNVector3] = []
+    var left: [simd_float3] = []
+    var right: [simd_float3] = []
 
     for (i, point) in points.enumerated() {
       guard let frame = frames[i] else { continue }
-
-      let raised = point.position + simd_float3(0, lift, 0)
-      let close = frame.offset * inner
-      let away = frame.offset * outer
-
-      let leftOuter = raised - away
-      let leftInner = raised - close
-      let rightInner = raised + close
-      let rightOuter = raised + away
-
-      left.append(SCNVector3(leftOuter.x, leftOuter.y, leftOuter.z))
-      left.append(SCNVector3(leftInner.x, leftInner.y, leftInner.z))
-      right.append(SCNVector3(rightInner.x, rightInner.y, rightInner.z))
-      right.append(SCNVector3(rightOuter.x, rightOuter.y, rightOuter.z))
+      left.append(point.position - frame.offset)
+      right.append(point.position + frame.offset)
     }
 
-    return [left, right].compactMap { stripNode(from: $0) }
+    guard left.count >= 2 else { return [] }
+
+    // Nothing is inserted where the two edges meet: an end is a straight hop
+    // across the width of the mark, which is the square cap.
+    return left + right.reversed()
+  }
+
+  /// The same loop pushed outwards by a fixed distance, corners mitred.
+  private func expand(_ loop: [simd_float3], by distance: Float) -> [simd_float3] {
+    zip(loop, outwardNormals(of: loop)).map { $0 + $1 * distance }
+  }
+
+  /// Which way is out at every vertex of a closed loop, and how far that corner
+  /// has to reach to keep both its edges parallel to where they started.
+  ///
+  /// The same mitre as `bandFrames` and for the same reason, differing only in
+  /// that a loop has no ends: every vertex has a neighbour on both sides, so the
+  /// two that close the loop wrap around instead of inheriting a single heading.
+  private func outwardNormals(of loop: [simd_float3]) -> [simd_float3] {
+    let up = simd_float3(0, 1, 0)
+    var normals: [simd_float3] = []
+
+    for i in loop.indices {
+      let previous = loop[(i + loop.count - 1) % loop.count]
+      let next = loop[(i + 1) % loop.count]
+      let incoming = flattened(loop[i] - previous)
+      let outgoing = flattened(next - loop[i])
+
+      // A repeated vertex has no heading of its own. It stays where it is rather
+      // than being dropped, so a loop and its expansion keep matching lengths.
+      guard let into = incoming ?? outgoing, let outOf = outgoing ?? incoming else {
+        normals.append(simd_float3(repeating: 0))
+        continue
+      }
+
+      // Out is to the left of travel. `outlineLoop` runs forward down the left
+      // edge and back along the right, so the mark it encloses is on the right the
+      // whole way round - including across both ends, which is the case that had
+      // to be got right rather than assumed.
+      let fromIn = -simd_cross(into, up)
+      let fromOut = -simd_cross(outOf, up)
+      let sum = fromIn + fromOut
+      let length = simd_length(sum)
+
+      guard length > 1e-3 else {
+        normals.append(fromOut)
+        continue
+      }
+
+      let bisector = sum / length
+      let cosHalf = max(simd_dot(bisector, fromOut), 1e-3)
+      normals.append(bisector * min(GroundPath.mitreLimit, 1 / cosHalf))
+    }
+
+    return normals
+  }
+
+  /// The band between two loops of the same length, as one closed triangle strip.
+  private func ringNode(
+    between inner: [simd_float3],
+    and outer: [simd_float3],
+    lift: Float
+  ) -> SCNNode? {
+    guard inner.count >= 3, inner.count == outer.count else { return nil }
+
+    var vertices: [SCNVector3] = []
+    for (near, far) in zip(inner, outer) {
+      let a = near + simd_float3(0, lift, 0)
+      let b = far + simd_float3(0, lift, 0)
+      vertices.append(SCNVector3(a.x, a.y, a.z))
+      vertices.append(SCNVector3(b.x, b.y, b.z))
+    }
+
+    // A triangle strip is open by nature, so the loop is closed by hand:
+    // repeating the first pair at the end is what turns the last vertices into a
+    // segment back to the beginning rather than a free end.
+    vertices.append(vertices[0])
+    vertices.append(vertices[1])
+
+    return stripNode(from: vertices)
   }
 
   /// A run of paired vertices as one triangle strip, which is what a swept line
