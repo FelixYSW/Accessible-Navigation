@@ -106,19 +106,18 @@ const MIN_DEPTH_M = 0.45;
 // underneath, then the fill with a bright rim on top. One outline colour always
 // loses against one of the two grounds this has to work on - pale concrete and
 // dark wet asphalt - so it gets both.
-const HALO_WIDTH = 8;
-const RIM_WIDTH = 2;
+const HALO_WIDTH = 10;
+const RIM_WIDTH = 5;
 
-// The near end is stronger and the far end fainter, which is what gives the band
-// its sense of receding. The same pair the anchored band uses.
+// The fill only, near end and far. The same pair the anchored chevrons use, and
+// barely there for the same reason: the outline carries the mark, and a filled
+// shape competes with the pavement for the same pixels.
 //
-// Well short of opaque, for the reason the anchored one is: a solid sheet of
-// colour laid over the pavement hides exactly what a walker most needs to see -
-// the kerb, the puddle, the broken slab. That argument is stronger here, not
-// weaker. This band is aimed by a magnetometer, so it is the one more likely to
-// be lying over ground the route does not actually cross.
-const NEAR_OPACITY = 0.32;
-const FAR_OPACITY = 0.22;
+// That argument is stronger here, not weaker. This path is aimed by a
+// magnetometer, so it is the one more likely to be lying over ground the route
+// does not actually cross - which makes seeing through it matter more.
+const NEAR_OPACITY = 0.16;
+const FAR_OPACITY = 0.11;
 
 interface GroundArrowsProps {
   /** Which way the route goes from where the walker is standing, relative to
@@ -177,7 +176,7 @@ export function GroundArrows({
           <Polyline
             points={chevron.points}
             fill="none"
-            stroke="rgba(0,0,0,0.55)"
+            stroke="rgba(0,0,0,0.8)"
             strokeWidth={chevron.stroke + HALO_WIDTH}
             strokeLinejoin="round"
             strokeLinecap="round"
@@ -186,7 +185,6 @@ export function GroundArrows({
             points={chevron.points}
             fill="none"
             stroke="#ffffff"
-            strokeOpacity={0.85}
             strokeWidth={chevron.stroke + RIM_WIDTH}
             strokeLinejoin="round"
             strokeLinecap="round"

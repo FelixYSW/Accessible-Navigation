@@ -843,6 +843,7 @@ export function ARNavigationScreen({ route, navigation }: Props) {
         <View
           style={[
             styles.sheetFill,
+            arrived && styles.sheetFillDone,
             { backgroundColor: OVERLAY_GREEN, width: `${Math.round(shownProgress * 100)}%` },
           ]}
         />
@@ -986,6 +987,15 @@ const styles = StyleSheet.create({
     // and it crosses that boundary at some point on every walk.
     opacity: 0.3,
   },
+
+  // Stronger once the route is over.
+  //
+  // A tint held at 0.3 is deliberately quiet while it is a progress reading, and
+  // quiet is the wrong register for "complete": a bar that merely looks nearly
+  // full says the opposite of what the words above it say. The sheet is
+  // translucent, so at 0.3 the camera image behind it can carry more contrast
+  // than the tint does and put an apparent edge where there is none.
+  sheetFillDone: { opacity: 0.5 },
   sheetRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   sheetText: { flex: 1 },
   destination: { color: '#fff', fontWeight: '700' },

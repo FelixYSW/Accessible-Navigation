@@ -156,10 +156,21 @@ enum GroundPath {
   static let groundProbeInterval: TimeInterval = 0.1
 
   /// The stretch of path planted by a tap in preview mode: how many points and
-  /// how far apart. The spacing matches ANCHOR_SPACING_M on the navigation screen, so
-  /// what is being previewed is the real thing at its real density.
-  static let previewCount = 8
-  static let previewSpacingM: Float = 1.2
+  /// how far apart.
+  ///
+  /// The spacing matches ANCHOR_SPACING_M on the navigation screen, so what is
+  /// previewed is the real thing at its real density - which is the whole claim
+  /// this screen makes, and it has to be kept true by hand whenever that figure
+  /// moves.
+  ///
+  /// Twelve points is twenty-two metres, which is long for a room and is the
+  /// point. A chevron every eight metres needs a run long enough to hold three of
+  /// them, and a turn cannot be told apart from a sharper one until enough of
+  /// what comes *after* the bend is on the ground to see. Eight points at the old
+  /// spacing was eight metres, so the whole difference between a left, a sharp
+  /// left and a u-turn lay past the end of the run.
+  static let previewCount = 12
+  static let previewSpacingM: Float = 2
 
   /// How wide the painted path is, in metres.
   ///
@@ -245,8 +256,25 @@ enum GroundPath {
   /// these are the same idea in metres: the centreline swept wider and drawn
   /// underneath. Chosen to match what those strokes subtend at about three
   /// metres, which is where most of the band a walker reads actually sits.
-  static let haloWidthM: Float = 0.075
-  static let rimWidthM: Float = 0.02
+  static let haloWidthM: Float = 0.1
+  static let rimWidthM: Float = 0.045
+
+  /// How solid the two outline layers are, live and for ground already walked.
+  ///
+  /// The outline carries the mark and the fill only tints it, which is the
+  /// opposite of how this started and is the right way round for guidance drawn
+  /// over a pavement someone is about to walk on. A filled shape competes with
+  /// the ground for the same pixels; an outlined one draws the eye to an edge
+  /// and leaves the middle to the pavement. So these are near solid while the
+  /// fill below is barely there.
+  ///
+  /// The walked pair are dimmer rather than a different colour. With the fill
+  /// this faint, grey against green is no longer enough on its own to say which
+  /// half of the route a chevron belongs to - brightness has to carry it.
+  static let haloOpacity: CGFloat = 0.8
+  static let rimOpacity: CGFloat = 1.0
+  static let walkedHaloOpacity: CGFloat = 0.45
+  static let walkedRimOpacity: CGFloat = 0.5
 
   /// The gap between the stacked strips. Millimetres - far below anything here
   /// is accurate to - and present only so coplanar surfaces cannot flicker.
@@ -254,19 +282,23 @@ enum GroundPath {
 
   /// The distance fade and the travelling highlight.
   ///
-  /// Deliberately well short of opaque, and that is a safety decision rather
-  /// than a stylistic one. At 0.95 the band was a solid sheet of colour laid
-  /// over the pavement, which hid exactly what a walker most needs to see -
-  /// the kerb, the puddle, the broken slab, the thing this app exists to warn
-  /// them about. Guidance that obscures the ground it is guiding you across is
-  /// worse than no guidance. The rim and halo are what keep it legible now,
-  /// and they outline rather than cover.
-  static let nearOpacity: CGFloat = 0.32
-  static let farOpacity: CGFloat = 0.22
+  /// Barely there, and that is a safety decision rather than a stylistic one.
+  ///
+  /// At 0.95 the band was a solid sheet of colour laid over the pavement, which
+  /// hid exactly what a walker most needs to see - the kerb, the puddle, the
+  /// broken slab, the thing this app exists to warn them about. Guidance that
+  /// obscures the ground it is guiding you across is worse than no guidance.
+  ///
+  /// It went 0.95, then 0.5, then 0.32, and now this. Each step was the same
+  /// discovery made again: whatever the fill is doing, the outline was doing it
+  /// better. So the fill has stopped trying. It is a tint that says which chevron
+  /// is live and which is behind you, and the outline does the rest.
+  static let nearOpacity: CGFloat = 0.16
+  static let farOpacity: CGFloat = 0.11
 
   /// Ground already covered.
-  static let walkedNearOpacity: CGFloat = 0.5
-  static let walkedFarOpacity: CGFloat = 0.32
+  static let walkedNearOpacity: CGFloat = 0.18
+  static let walkedFarOpacity: CGFloat = 0.12
 
   /// How far the floor estimate has to move before the 3D band is rebuilt on
   /// it. A centimetre is below what any of this resolves and well below what a
@@ -309,11 +341,28 @@ enum GroundPath {
   /// becoming a wall that hides the doorway it is pointing at.
   static let pinHeightM: Float = 1.0
 
-  /// How wide the pin's head is, as a fraction of its height. Two thirds - the
-  /// classic map-pin proportion, and the same figures the flat one was drawn
-  /// from, so this is recognisably the marker that was there before rather than
-  /// a redesign smuggled in with a rendering change.
-  static let pinHeadRadiusFraction: Float = 1.0 / 3
+  /// The pin's outline, in the 24-by-36 unit space it is drawn in: the tip at
+  /// the origin, a bulb of radius 12 centred 24 above it, and a hole of radius
+  /// 5 punched through that bulb.
+  ///
+  /// The hole is the whole reason this is an extruded outline rather than the
+  /// ball on a spike it started as. A ball is a solid of revolution and needs no
+  /// billboard, which was elegant - but it is not the shape anyone recognises,
+  /// and a marker that has to be understood at a glance should look like the
+  /// thing it is imitating rather than like the cleanest way to build it.
+  static let pinUnitHeight: CGFloat = 36
+  static let pinBulbRadius: CGFloat = 12
+  static let pinBulbCentre: CGFloat = 24
+  static let pinHoleRadius: CGFloat = 5
+
+  /// How thick the pin is and how rounded its edges are, in the same units.
+  ///
+  /// Thickness is what stops an extruded outline reading as a cut-out. The
+  /// chamfer is what stops it reading as a slab: a hard 90-degree edge takes no
+  /// highlight, and the bright line running down a rounded edge is most of what
+  /// the eye uses to decide something is solid.
+  static let pinThicknessUnits: CGFloat = 5
+  static let pinChamferUnits: CGFloat = 1.2
 
   /// How glossy the pin is: plastic, not metal and not chalk.
   ///
@@ -321,7 +370,10 @@ enum GroundPath {
   /// an object someone left on the pavement. A surface with no gloss at all takes
   /// no highlight and shows nothing of the room it is standing in, and nothing in
   /// a camera frame behaves that way.
-  static let pinRoughness: CGFloat = 0.35
+  ///
+  /// Lowered for the extruded shape, which wants to look like moulded plastic
+  /// with a sheen on it rather than like matte paint.
+  static let pinRoughness: CGFloat = 0.22
 
   /// A little light of its own, so a marker in deep shade is still findable.
   /// Realism is the goal right up to the point where it hides the destination.
@@ -345,7 +397,14 @@ enum GroundPath {
   /// going, so it read as shrinking on approach. Cutting it is honest, and it
   /// costs nothing: the label is drawn by the JS layer at a fixed size and stays,
   /// so the destination is still named at the moment the pin gives way to it.
-  static let pinNearCutM: Float = 1.5
+  ///
+  /// Sixty centimetres, down from a metre and a half, because the first figure
+  /// was guessed and the arithmetic says it was far too cautious. A one-metre
+  /// pin covers about a quarter of the screen's height at a metre and a half -
+  /// nowhere near the slab this is guarding against, and well inside the radius
+  /// at which the route is declared arrived. It was cutting the marker away at
+  /// exactly the moment it is meant to say "this one".
+  static let pinNearCutM: Float = 0.6
 
   /// The contact shadow under the pin, as a fraction of its height, and how
   /// dark its centre is.
@@ -1581,54 +1640,103 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       node.addChildNode(discNode)
     }
 
-    // A head on a tapered spike, both solid, both lit by the room.
+    // The outline, extruded and given a rounded edge, so it is the map pin
+    // everyone already knows how to read - hole and all - rather than the
+    // cleanest shape to build.
     //
-    // No billboard, and none needed: a solid of revolution presents the same
-    // silhouette from every direction, so it faces the walker from every
-    // approach by being that shape rather than by being turned. The flat version
-    // had to be spun to face you, which is exactly the trick that gives a sprite
-    // away when you move around it.
-    let height = GroundPath.pinHeightM
-    let headRadius = height * GroundPath.pinHeadRadiusFraction
-    let headCentre = height - headRadius
+    // Extruding brings the billboard back, and that is the trade being made
+    // knowingly. A ball on a spike needed no billboard because it looks the same
+    // from everywhere; this has a face and has to be turned to show it. What
+    // makes that acceptable now is that it is no longer flat: it has five units
+    // of thickness and a chamfered edge catching the room's own light, so
+    // walking round it shows a solid object turning rather than a picture
+    // swivelling to follow you.
+    let shape = SCNShape(path: pinPath(), extrusionDepth: GroundPath.pinThicknessUnits)
+    shape.chamferRadius = GroundPath.pinChamferUnits
+    // One material across every element the shape generates - front, back, the
+    // extruded sides and both chamfers. SceneKit repeats the list when there are
+    // fewer materials than elements, which is what makes a single entry cover
+    // all of them and the highlight run unbroken round the edge.
+    shape.materials = [pinMaterial()]
 
-    // Where the spike meets the head, worked out so the two are tangent and the
-    // silhouette has no crease in it. A cone jammed into a sphere at any old
-    // angle leaves a visible ring, and a ring is the sort of thing the eye reads
-    // as two objects rather than one.
-    //
-    // The tip sits `headCentre` below the head's centre, so the tangent line
-    // from it is sqrt(headCentre^2 - headRadius^2) long; the tangent circle lies
-    // that far along it, resolved into a height up the axis and a radius out.
-    let tangent = sqrt(max(0, headCentre * headCentre - headRadius * headRadius))
-    let sinAlpha = headCentre > 0 ? headRadius / headCentre : 0
-    let cosAlpha = headCentre > 0 ? tangent / headCentre : 1
-    let joinY = tangent * cosAlpha
-    let joinRadius = tangent * sinAlpha
+    let body = SCNNode(geometry: shape)
+    // The path is drawn in units and the pin is wanted in metres. The tip sits
+    // at the path's origin, so scaling about that origin leaves it exactly on
+    // the ground - no offset to get wrong, unlike the textured plane this
+    // replaced, where three units of margin below the tip put the whole pin
+    // seven centimetres into the air.
+    let unit = Float(CGFloat(GroundPath.pinHeightM) / GroundPath.pinUnitHeight)
+    body.scale = SCNVector3(unit, unit, unit)
 
-    let material = pinMaterial()
-
-    let spike = SCNCone(
-      topRadius: CGFloat(joinRadius),
-      bottomRadius: 0,
-      height: CGFloat(joinY)
-    )
-    spike.radialSegmentCount = 48
-    spike.materials = [material]
-    let spikeNode = SCNNode(geometry: spike)
-    // A cone is centred on its own height with the point at -Y, so lifting it
-    // half its height puts the point on the ground.
-    spikeNode.position = SCNVector3(0, joinY / 2, 0)
-    node.addChildNode(spikeNode)
-
-    let head = SCNSphere(radius: CGFloat(headRadius))
-    head.segmentCount = 48
-    head.materials = [material]
-    let headNode = SCNNode(geometry: head)
-    headNode.position = SCNVector3(0, headCentre, 0)
-    node.addChildNode(headNode)
+    // Turns about the vertical only. Free on every axis it would tip back to
+    // face a walker looking down at it, and a marker that lies over towards you
+    // is a sticker. Rotating about the node's origin, which is the tip, is what
+    // keeps the point planted while the pin turns.
+    let billboard = SCNBillboardConstraint()
+    billboard.freeAxes = .Y
+    body.constraints = [billboard]
+    node.addChildNode(body)
 
     return node
+  }
+
+  /// The pin's outline: a teardrop with a hole through its bulb.
+  ///
+  /// Drawn in the 24-by-36 unit space described on `pinUnitHeight`, tip at the
+  /// origin and bulb above it, which is the same outline the flat version used -
+  /// so this is the marker that was there before, given thickness and a hole,
+  /// rather than a different marker.
+  private func pinPath() -> UIBezierPath {
+    let radius = GroundPath.pinBulbRadius
+    let centre = GroundPath.pinBulbCentre
+    let steps = 48
+
+    let path = UIBezierPath()
+    path.move(to: CGPoint(x: 0, y: 0))
+    path.addCurve(
+      to: CGPoint(x: -radius, y: centre),
+      controlPoint1: CGPoint(x: -radius / 2, y: 10),
+      controlPoint2: CGPoint(x: -radius, y: 16)
+    )
+
+    // The bulb, written out as segments from the left of the circle over its top
+    // to the right.
+    //
+    // Written out rather than left to `addArc`, whose `clockwise` flag is defined
+    // in UIKit's y-down space while SCNShape reads the path y-up. The two
+    // conventions disagree, and taking the wrong half of the circle produces a
+    // bulb tucked inside the pin's own body - a mistake that shows up only on a
+    // device. Computing the points settles it here instead. Forty-eight segments
+    // on a twelve-unit radius is finer than the chamfer that rounds it.
+    for step in 1...steps {
+      let angle = CGFloat.pi * (1 - CGFloat(step) / CGFloat(steps))
+      path.addLine(to: CGPoint(x: cos(angle) * radius, y: centre + sin(angle) * radius))
+    }
+
+    path.addCurve(
+      to: CGPoint(x: 0, y: 0),
+      controlPoint1: CGPoint(x: radius, y: 16),
+      controlPoint2: CGPoint(x: radius / 2, y: 10)
+    )
+    path.close()
+
+    // The hole, as its own closed subpath under the even-odd rule - which makes
+    // it a hole whichever way round it is wound. The alternative is to wind it
+    // against the outline and hope, and there is no way to check that here.
+    let hole = UIBezierPath()
+    for step in 0...steps {
+      let angle = CGFloat.pi * 2 * CGFloat(step) / CGFloat(steps)
+      let point = CGPoint(
+        x: cos(angle) * GroundPath.pinHoleRadius,
+        y: centre + sin(angle) * GroundPath.pinHoleRadius
+      )
+      if step == 0 { hole.move(to: point) } else { hole.addLine(to: point) }
+    }
+    hole.close()
+
+    path.append(hole)
+    path.usesEvenOddFillRule = true
+    return path
   }
 
   /// The pin's surface.
@@ -1886,16 +1994,35 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       )
     else { return nil }
 
-    halo.geometry?.materials = [flatMaterial(UIColor(white: 0, alpha: walked ? 0.35 : 0.55))]
+    halo.geometry?.materials = [
+      flatMaterial(
+        UIColor(
+          white: 0,
+          alpha: walked ? GroundPath.walkedHaloOpacity : GroundPath.haloOpacity
+        )
+      )
+    ]
     halo.renderingOrder = -14
 
-    rim.geometry?.materials = [flatMaterial(UIColor(white: 1, alpha: walked ? 0.4 : 0.85))]
+    rim.geometry?.materials = [
+      flatMaterial(
+        UIColor(
+          white: 1,
+          alpha: walked ? GroundPath.walkedRimOpacity : GroundPath.rimOpacity
+        )
+      )
+    ]
     rim.renderingOrder = -13
 
     // The distance fade is now a flat colour per chevron rather than a gradient
     // painted along the run, which is both simpler and more correct. A chevron is
     // a single mark at a single distance; fading *within* one would say its near
     // arm is closer than its far arm, and its arms are side by side.
+    //
+    // Only the fill fades. The outline holds its strength all the way out, which
+    // is what keeps a distant chevron findable at all - it is already down to a
+    // few pixels of screen by then, and fading the one part still carrying the
+    // shape would be fading it away exactly where the walker is looking ahead.
     let near = walked ? GroundPath.walkedNearOpacity : GroundPath.nearOpacity
     let far = walked ? GroundPath.walkedFarOpacity : GroundPath.farOpacity
     let alpha = near + (far - near) * CGFloat(fade)
@@ -2187,13 +2314,50 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
     let a = points[bestIndex].position
     let b = points[bestIndex + 1].position
-    // The join carries no marker: it lands wherever the walker happens to be
-    // rather than on the lattice, so a triangle there would slide along the
-    // band as they walked instead of staying on its patch of ground.
-    let join = PathPoint(position: a + (b - a) * bestT, marker: false)
+    let cut = a + (b - a) * bestT
 
-    let walked = Array(points[0...bestIndex]) + [join]
-    let ahead = [join] + Array(points[(bestIndex + 1)...])
+    // Whether the cut lands exactly on one of the run's own points rather than
+    // between two of them, which is the common case and not the rare one: the
+    // walker starts every route standing at its first point, and every preview
+    // placement starts under the spot that was tapped.
+    let landsOn: Int?
+    if bestT <= 1e-3 {
+      landsOn = bestIndex
+    } else if bestT >= 1 - 1e-3 {
+      landsOn = bestIndex + 1
+    } else {
+      landsOn = nil
+    }
+
+    // A chevron sitting exactly on the cut belongs to the stretch ahead, and to
+    // that stretch only.
+    //
+    // This is the whole of the bug it fixes. The cut used to replace whatever
+    // point it landed on with a marker-less one, so a walker standing on a
+    // lattice point silently destroyed its chevron - and since they stand on the
+    // *first* point of a fresh preview placement, the first chevron was the one
+    // destroyed every time. What showed up instead was the second, a full spacing
+    // further on, which reads as the guidance being placed several metres away
+    // from where it was asked for.
+    //
+    // Handing it to one side rather than both matters too. A chevron drawn on the
+    // walked stretch and again on the stretch ahead would sit in the same place
+    // twice, once grey and once live, at double the opacity of either.
+    let carries = landsOn.map { points[$0].marker } ?? false
+
+    var walked = Array(points[0...bestIndex])
+    if landsOn == bestIndex {
+      // The cut is on the last walked point: it stays, but hands its chevron on.
+      walked[walked.count - 1] = PathPoint(position: cut, marker: false)
+    } else {
+      walked.append(PathPoint(position: cut, marker: false))
+    }
+
+    var ahead = Array(points[(bestIndex + 1)...])
+    // Landing on the far end of the segment would otherwise leave that point in
+    // twice - once as itself and once as the cut.
+    if landsOn == bestIndex + 1, !ahead.isEmpty { ahead.removeFirst() }
+    ahead.insert(PathPoint(position: cut, marker: carries), at: 0)
 
     return (walked, ahead)
   }
