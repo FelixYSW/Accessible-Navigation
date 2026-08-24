@@ -36,7 +36,23 @@ import Svg, { Polyline } from 'react-native-svg';
 // measure them with. So the band shows which way to go; it is not a survey mark,
 // and a walker reads its direction rather than the exact paving slab it lands on.
 const CAMERA_HEIGHT_M = 1.4;
-const CAMERA_FOV_DEG = 62;
+
+// The field actually on screen, which is much narrower than the camera's own.
+//
+// This was 62 - roughly the sensor's horizontal field - and that was wrong by
+// about a factor of two, because it described the picture the camera captures
+// rather than the part of it the walker is shown. The preview is aspect-filled
+// into a tall portrait view, so a 4:3 frame is scaled to the view's height and
+// has most of its width cropped away: about 61% of it survives.
+//
+// Portrait puts the sensor's short side across the screen, so the field being
+// cropped is the ~54 degree one, and 2*atan(0.61 * tan(27)) comes out at 35.
+//
+// Too wide a figure here means too short a focal length, which draws everything
+// closer to the centre and smaller than it really is - the same error that put
+// the destination's name halfway down the pin until the renderer started
+// reporting that position itself.
+const CAMERA_FOV_DEG = 35;
 
 // Used until the first device-motion reading arrives - roughly how a phone is
 // held when walking with it.
@@ -45,14 +61,14 @@ export const DEFAULT_CAMERA_PITCH_DEG = 30;
 // How far ahead the chevrons are drawn, in metres.
 //
 // This used to be six, because past that a band ninety centimetres across had
-// narrowed to a few points of screen. A chevron eight metres across is still
-// legible at eighteen.
+// narrowed to a few points of screen. A chevron four metres across is still
+// legible at twenty.
 //
 // Reaching further is only defensible *because* they are wide. This path is
 // aimed by a magnetometer, and a ten-degree bearing error puts the far end of
-// an eighteen-metre run three metres off to the side - which a chevron eight
-// metres across still covers, and a narrow band would not have.
-const PATH_LENGTH_M = 18;
+// a twenty-metre run three metres off to the side - which a chevron four
+// metres across still mostly covers, and a narrow band would not have.
+const PATH_LENGTH_M = 20;
 
 // The chevron, in metres: how far it spans, how thick its arms are drawn, and
 // how far its point reaches forward as a fraction of its span.
@@ -62,18 +78,24 @@ const PATH_LENGTH_M = 18;
 // changing rather than as the same guidance from a different source. Only its
 // steadiness differs, which is honest: that is the only thing that did change.
 //
-// Fixed at the wide end of the anchored version's range rather than measured.
-// There is nothing here to measure it from - no pose, no accuracy figure, no
-// offset from a route line - and this is the *less* certain of the two paths,
-// so the wide end is the honest end to sit at.
-const CHEVRON_WIDTH_M = 8;
+// Was eight, at the wide end of the anchored version's range, on the argument
+// that this is the less certain path and should say so by covering more ground.
+// The argument is sound and the number was still unusable: eight metres does
+// not fit on the screen at the distance the nearest chevron is drawn.
+//
+// The camera sees `2 * depth * tan(fov/2)` of ground across, which at six
+// metres out is under four. A chevron wider than that has both arms off the
+// sides of the frame, leaving only the wedge at its point in view - which reads
+// as a small mark rather than as a wide one, so the width bought nothing and
+// cost the shape.
+const CHEVRON_WIDTH_M = 4;
 const CHEVRON_ARM_M = 0.34;
 const CHEVRON_SWEEP_FRACTION = 0.35;
 
 // Where the first one sits and how far apart they are. Far enough out that the
 // nearest is not under the walker's own feet, which is the one place a marker
 // on the ground says nothing.
-const CHEVRON_FIRST_M = 4;
+const CHEVRON_FIRST_M = 6;
 const CHEVRON_SPACING_M = 6;
 
 // The thinnest an arm is drawn, whatever perspective says. A stroke below a
@@ -106,18 +128,26 @@ const MIN_DEPTH_M = 0.45;
 // underneath, then the fill with a bright rim on top. One outline colour always
 // loses against one of the two grounds this has to work on - pale concrete and
 // dark wet asphalt - so it gets both.
-const HALO_WIDTH = 10;
-const RIM_WIDTH = 5;
+const HALO_WIDTH = 18;
+const RIM_WIDTH = 9;
 
-// The fill only, near end and far. The same pair the anchored chevrons use, and
-// barely there for the same reason: the outline carries the mark, and a filled
-// shape competes with the pavement for the same pixels.
+// The fill only, near end and far.
 //
-// That argument is stronger here, not weaker. This path is aimed by a
-// magnetometer, so it is the one more likely to be lying over ground the route
-// does not actually cross - which makes seeing through it matter more.
-const NEAR_OPACITY = 0.16;
-const FAR_OPACITY = 0.11;
+// Higher than the anchored chevrons' 0.4 and 0.28, and not because this should
+// be bolder - it should not. These three passes are *centred strokes*, so the
+// white rim is not a ring around the fill, it is a solid white stroke directly
+// underneath the whole of it. The green is therefore composited over white
+// rather than over the pavement, and at 0.16 that made it 84% white: a white
+// chevron on pale concrete in daylight, which is to say nothing at all.
+//
+// The anchored side fixed this properly, by building the outline as a ring with
+// the middle left empty; see `chevronNode`. The same fix here means computing
+// the outline of the V rather than stroking its centreline, which is a real
+// piece of geometry and not a constant. Until then these are raised to undo the
+// underlay: 0.6 over opaque white lands near 0.4 over pavement, which is what
+// the two paths agreeing actually requires.
+const NEAR_OPACITY = 0.6;
+const FAR_OPACITY = 0.45;
 
 interface GroundArrowsProps {
   /** Which way the route goes from where the walker is standing, relative to
