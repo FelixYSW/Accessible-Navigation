@@ -32,19 +32,50 @@ Innovation, with Kuala Lumpur as the study area. iOS-first.
 
 ### AR navigation
 
-- **Geospatial anchors.** Chevrons are anchored to real-world coordinates via
-  ARCore's Geospatial API, so they stay on their bit of pavement as the walker
-  moves rather than sliding with the phone.
-- **Ground-projected chevrons** drawn through a pinhole camera model with
-  measured device pitch, so they foreshorten like paint on the road instead of
-  scaling like a sticker on the lens.
-- **Compass fallback** when visual localisation is unavailable — the guidance
-  degrades rather than disappearing.
+- **Guidance is geometry, not an overlay.** The chevrons and the destination
+  pin are SceneKit nodes inside the ARKit scene, rasterised in the same pass as
+  the camera image they lie on. An overlay is computed from one frame and
+  composited a frame or two later, so it is always drawn for a pose the phone
+  has already left — it holds still when the phone does and slides when it
+  moves. Geometry cannot be late, and a wall can hide it.
+- **Geospatial anchors.** Route points are anchored to real-world coordinates
+  through ARCore's Geospatial API, so a chevron stays on its bit of pavement as
+  the walker moves rather than sliding with the phone.
+- **Stuck to the ground, and to its slope.** Each point raycasts for the floor
+  beneath *itself* rather than borrowing the one measured under the walker, so a
+  run laid down a ramp follows the ramp.
+- **Chevrons rather than a band.** A band wide enough to span a road is a sheet
+  of paint over the road, hiding the kerb and the broken slab this app exists to
+  warn about. A chevron spans the same width with two strokes a third of a metre
+  thick and leaves everything between them clear.
+- **Width is an admission, not a style.** It tracks how far apart the two
+  answers to "where is the route" currently are — what the map says, and where
+  the walker is standing — widening from 3 m to 14 m as that gap grows. Wide
+  means "somewhere along here", which on a road whose pavements OSM has not
+  mapped is the truth.
+- **Grey behind, green ahead.** The run is cut where the walker stands. The
+  covered half is invisible while walking forwards and is what makes turning
+  round intelligible — otherwise a glance back at a junction shows a run leading
+  away in the direction you came from, indistinguishable from an instruction to
+  go that way.
+- **Occlusion.** Someone stepping between the phone and the guidance hides it
+  correctly; on LiDAR devices the room mesh does too.
+- **3D destination pin** — an extruded teardrop with a chamfered edge, lit by
+  the environment ARKit estimates from the camera feed, standing on its own
+  painted contact shadow. Its size on screen is held beyond 14 m and below 6 m,
+  so it is neither a speck across a junction nor a slab underfoot.
+- **Compass fallback** when visual localisation is unavailable — the same
+  chevron shape from a different source, so switching mid-walk reads as the
+  guidance staying put rather than as the guidance changing. Only its steadiness
+  differs, which is honest: that is the only thing that did change.
 - **Scan prompt** while the AR session localises, with a live accuracy
   readout, and an honest "no visual coverage here" state where Street View
   imagery does not reach.
-- **Destination pin** in AR as the walker arrives.
-- **Turn banner** with manoeuvre glyph, distance, street name and progress.
+- **Preview screen** for placing each component indoors by tapping the floor,
+  with no route and no Geospatial session — through the same code path a real
+  route takes, so what is judged there is what ships.
+- **Turn banner and arrival.** Manoeuvre glyph, distance, street name and
+  progress, latching to "Arrived" on reaching the destination.
 
 ### Hazard detection
 
@@ -82,13 +113,14 @@ Innovation, with Kuala Lumpur as the study area. iOS-first.
 | Routing | OpenRouteService over OpenStreetMap; Google Directions as fallback |
 | Barrier data | OpenStreetMap via Overpass (three mirrors, with failover) |
 | AR session | ARKit + ARCore Geospatial, in a custom Swift native module |
+| AR rendering | SceneKit geometry inside `ARSCNView` — chevrons, pin, occluders |
 | Hazard model | YOLO26n fine-tuned, exported to Core ML, run through Vision |
 | Camera | AVFoundation (hazard screen), ARKit (AR screen) |
-| 2D overlays | `react-native-svg` |
+| 2D overlays | `react-native-svg` — hazard boxes, destination label, compass fallback |
 | Sensors | `expo-sensors` device motion, for camera pitch |
 | Speech | `expo-speech` + `AccessibilityInfo`, audio session via `expo-audio` |
 | Storage | AsyncStorage for persisted settings |
-| Icons | `lucide-react-native` |
+| Icons | `expo-symbols` (SF Symbols), with `lucide-react-native` as the fallback |
 | CI | GitHub Actions on `macos-26`, producing an unsigned `.ipa` |
 
 ### Why OpenStreetMap for routing
@@ -111,8 +143,9 @@ than OSM's geocoder.
 
 ```
 src/
-  screens/          MapScreen, ARNavigationScreen, HazardDetectionScreen, SettingsScreen
-  components/       Presentational + camera overlays (chevrons, pills, toggles, prompts)
+  screens/          MapScreen, ARNavigationScreen, ARPreviewScreen,
+                    HazardDetectionScreen, SettingsScreen
+  components/       Presentational + camera overlays (labels, pills, toggles, prompts)
   services/         Routing, barrier screening, hazard filtering, speech, mobility model
   utils/            geo.ts (projection, distance, route maths), format.ts
   types/            Route and hazard domain types
@@ -132,17 +165,24 @@ plugins/withModularHeaders.js   Config plugin required by the ARCore pod
 
 ### Key components
 
+The anchored guidance has no entry here, and that is the point: the chevrons
+and the pin are built in `ARGeospatialView.swift` and never cross the bridge.
+What is left on the JS side is what deliberately must not obey perspective.
+
 | Component | Does |
 |---|---|
-| `GroundChevrons` | Draws geospatially-anchored chevrons projected by the native session |
-| `GroundArrows` | Compass-drawn fallback run, matched in size and style |
-| `DestinationPin` | Billboard pin in AR, scaled by distance |
+| `DestinationLabel` | The destination's name, hung above the pin the native side draws. Stays flat so it cannot shrink out of legibility at range |
+| `GroundArrows` | Compass-drawn fallback run, matched in shape to the anchored one |
 | `ScanPrompt` | Localisation progress, with a no-coverage branch |
+| `ARScanOverlay` | Held over the preview screen until ARKit has found a surface |
 | `HazardOverlay` | Bounding boxes and labels over the camera |
 | `HazardTypeBar` | Collapsible per-type toggles, master switch when collapsed |
+| `HazardIntro` | Opening card on the hazard screen, dismissed by the user |
 | `VoiceCueBar` | Turn and hazard cue switches |
 | `RoutePillOverlay` | Route labels projected over the map, with overlap avoidance |
 | `CameraStage` | Shared camera surface and permission handling |
+| `AppIcon` | Every icon as an SF Symbol, with the lucide equivalent as fallback |
+| `SegmentedField` | Segmented control that sizes segments by content rather than truncating |
 
 ### Key services
 
@@ -254,8 +294,14 @@ actually label.
 
 ## Known limitations
 
-- **Arrival detection and off-route rerouting are not implemented.** The route
-  does not currently re-plan if the walker leaves it.
+- **Off-route rerouting is not implemented.** The route does not re-plan if the
+  walker leaves it. The drawn run is shifted sideways to meet them and widened
+  to admit the uncertainty, but it is still the original route.
+- **The anchored path needs a good pose to engage.** Chevrons are only trusted
+  at a horizontal accuracy of 3 m or better *and* a heading accuracy of 15° or
+  better. Built-up streets often fail the heading test, and the walk then falls
+  back to compass guidance, which is aimed by a magnetometer and assumes the
+  camera height. It shows which way to go; it is not a survey mark.
 - **Accessibility restrictions are thinly supported by the data.** The KL
   study area has 296 tagged kerbs and 228 tagged inclines against 14,601
   footways, so incline and kerb limits rarely bind in practice. Step avoidance
