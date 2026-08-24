@@ -347,12 +347,20 @@ enum GroundPath {
   /// enough to see is a correction large enough to rebuild for.
   static let rebuildMoveM: Float = 0.05
 
-  /// How tall the destination pin stands, in metres.
+  /// How tall the destination pin stands, in metres, at the range it is drawn
+  /// true - see `pinScreenLockNearM`.
   ///
-  /// About waist height on an adult. Big enough to be unmissable from across a
-  /// junction and to read as an object standing on the pavement, without
-  /// becoming a wall that hides the doorway it is pointing at.
-  static let pinHeightM: Float = 1.0
+  /// Waist height was a guess and too small by more than half. A map pin is not
+  /// a bollard: it is signage, and signage meant to be read down a street is head
+  /// height or better. At a metre it came out nineteen points tall at thirty-three
+  /// metres, which is shorter than the label hanging above it.
+  /// `pinScreenLockNearM`.
+  ///
+  /// A metre was a guess and too small by more than half. A map pin is not a
+  /// bollard: it is signage, and signage meant to be read down a street is head
+  /// height or better. At a metre it was nineteen points tall at thirty-three
+  /// metres, which is smaller than the label hanging above it.
+  static let pinHeightM: Float = 2.2
 
   /// The pin's outline, in the 24-by-36 unit space it is drawn in: the tip at
   /// the origin, a bulb of radius 12 centred 24 above it, and a hole of radius
@@ -418,6 +426,30 @@ enum GroundPath {
   /// at which the route is declared arrived. It was cutting the marker away at
   /// exactly the moment it is meant to say "this one".
   static let pinNearCutM: Float = 0.6
+
+  /// How near and how far the pin holds its size on screen.
+  ///
+  /// Between these two it is a plain object a fixed number of metres tall, and
+  /// behaves like one: nearer is bigger. Outside them its height in metres is
+  /// scaled by distance, which holds its height *on screen* instead.
+  ///
+  /// The far end is the one that had to be fixed. A two-metre pin at thirty-three
+  /// metres is forty points tall on a screen eight hundred and fifty points high -
+  /// correct perspective, and useless, because the whole job of the marker is to
+  /// be picked out at the far end of the street. Growing it with range keeps it
+  /// the same size to look at wherever it is.
+  ///
+  /// The near end guards the opposite failure and is the reason this is a window
+  /// rather than a single threshold: true perspective on a pin at arm's length is
+  /// a red slab across the frame, hiding the pavement at the exact moment the
+  /// walker is stepping onto it.
+  ///
+  /// This is the size cap the overlay version had, which was removed for reading
+  /// as the pin shrinking on approach - and it deserved to be. The difference is
+  /// that this is no longer a cap: it is applied at both ends and in world units,
+  /// so what is held is the angle the pin subtends. Nothing stops and starts.
+  static let pinScreenLockNearM: Float = 6
+  static let pinScreenLockFarM: Float = 14
 
   /// The contact shadow under the pin, as a fraction of its height, and how
   /// dark its centre is.
@@ -1388,7 +1420,10 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
           position: standing,
           index: request.id,
           kind: request.kind,
-          headM: GroundPath.pinHeightM,
+          // The same height the pin is actually built at, not the constant. These
+          // two disagreeing is what would put the name through the middle of the
+          // marker instead of above it.
+          headM: pinHeight(at: flatDistance(to: standing, arFrame: arFrame)),
           arFrame: arFrame,
           viewport: viewport
         )
@@ -1611,10 +1646,35 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     for pin in laid.pins {
       let away = simd_length(simd_float3(pin.x - camera.x, 0, pin.z - camera.z))
       guard away > GroundPath.pinNearCutM, away < GroundPath.pinFarCutM else { continue }
-      let node = pinNode(at: pin)
+      let node = pinNode(at: pin, distance: away)
       sceneView.scene.rootNode.addChildNode(node)
       pathNodes.append(node)
     }
+  }
+
+  /// How tall to build the pin for something this far away.
+  ///
+  /// Its true height between the two lock distances, and scaled by range outside
+  /// them so that what stays constant there is its size on screen rather than its
+  /// size in the world. See `pinScreenLockNearM`.
+  private func pinHeight(at distance: Float) -> Float {
+    if distance < GroundPath.pinScreenLockNearM {
+      return GroundPath.pinHeightM * (distance / GroundPath.pinScreenLockNearM)
+    }
+    if distance > GroundPath.pinScreenLockFarM {
+      return GroundPath.pinHeightM * (distance / GroundPath.pinScreenLockFarM)
+    }
+    return GroundPath.pinHeightM
+  }
+
+  /// How far a point is from the camera across the ground.
+  ///
+  /// Flat, for the same reason the pin's own range test is: the camera is at head
+  /// height and the pin is on the floor, so counting the vertical drop would
+  /// report a metre and a half of distance to something underfoot.
+  private func flatDistance(to position: simd_float3, arFrame: ARFrame) -> Float {
+    let camera = origin(of: arFrame.camera.transform)
+    return simd_length(simd_float3(position.x - camera.x, 0, position.z - camera.z))
   }
 
   /// The destination, standing on the spot.
@@ -1632,12 +1692,18 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   /// because a label that shrank with distance would be unreadable exactly when
   /// the walker most wants to know which doorway is meant. The pin is an object
   /// and belongs in the world; its name is interface and belongs on the glass.
-  private func pinNode(at position: simd_float3) -> SCNNode {
+  private func pinNode(at position: simd_float3, distance: Float) -> SCNNode {
     let node = SCNNode()
     node.simdPosition = position
 
+    // Everything below is built from this rather than from the constant, so the
+    // shadow grows with the pin it belongs to. A marker that outgrew its own
+    // shadow would be back to hovering, which is the thing the shadow is there to
+    // prevent.
+    let height = pinHeight(at: distance)
+
     if let shadow = shadowImage() {
-      let radius = CGFloat(GroundPath.pinHeightM * GroundPath.pinShadowRadiusFraction)
+      let radius = CGFloat(height * GroundPath.pinShadowRadiusFraction)
       let disc = SCNPlane(width: radius * 2, height: radius * 2)
       let material = SCNMaterial()
       material.lightingModel = .constant
@@ -1679,7 +1745,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // the ground - no offset to get wrong, unlike the textured plane this
     // replaced, where three units of margin below the tip put the whole pin
     // seven centimetres into the air.
-    let unit = Float(CGFloat(GroundPath.pinHeightM) / GroundPath.pinUnitHeight)
+    let unit = Float(CGFloat(height) / GroundPath.pinUnitHeight)
     body.scale = SCNVector3(unit, unit, unit)
 
     // Turns about the vertical only. Free on every axis it would tip back to
@@ -2416,7 +2482,7 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
           // navigation screen uses, so the JS side treats it the same way.
           index: -1 - index,
           kind: run.kind,
-          headM: GroundPath.pinHeightM,
+          headM: pinHeight(at: flatDistance(to: first.position, arFrame: arFrame)),
           arFrame: arFrame,
           viewport: viewport
         )
