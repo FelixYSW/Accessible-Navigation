@@ -39,6 +39,8 @@ import {
   type Maneuver,
 } from '../components/maneuverIcons';
 import { HazardOverlay } from '../components/HazardOverlay';
+import { PerformanceHud } from '../components/PerformanceHud';
+import { usePerformanceReadout } from '../services/performance';
 import { ScanPrompt } from '../components/ScanPrompt';
 import { VoiceCueBar } from '../components/VoiceCueBar';
 import { HazardTypeBar } from '../components/HazardTypeBar';
@@ -277,7 +279,21 @@ const DISTRUST_ANCHORS_HEADING_DEG = 25;
 export function ARNavigationScreen({ route, navigation }: Props) {
   const { route: walkingRoute } = route.params;
   const insets = useSafeAreaInsets();
-  const { T, F, scaled, hazardActive, mobilityAid, spokenTurns, hazardCues } = useSettings();
+  const {
+    T,
+    F,
+    scaled,
+    hazardActive,
+    mobilityAid,
+    spokenTurns,
+    hazardCues,
+    showPerformance,
+  } = useSettings();
+
+  // The screen where the measurement matters most: ARKit calls this view's
+  // session delegate on the main thread, and hazard inference runs inside that
+  // call, so whatever the model costs comes out of the renderer's budget.
+  const performance = usePerformanceReadout(showPerformance);
   const [position, setPosition] = useState<LatLng | null>(null);
   const [heading, setHeading] = useState(0);
   // How far the phone is tilted down from level. Measured, so the ground
@@ -716,6 +732,8 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       onGeospatialUpdate={handleGeospatialUpdate}
       onAnchorsUpdate={handleAnchorsUpdate}
       onHazards={onHazards}
+      onPerformance={performance.onPerformance}
+      benchmarkMode={performance.benchmarkMode}
     />
   ) : undefined;
 
@@ -766,6 +784,14 @@ export function ARNavigationScreen({ route, navigation }: Props) {
       )}
 
       <HazardOverlay detections={detections} />
+
+      {showPerformance ? (
+        <PerformanceHud
+          reading={performance.reading}
+          benchmarking={performance.benchmarking}
+          onToggleBenchmark={performance.toggleBenchmark}
+        />
+      ) : null}
 
       {/* Above the overlays but below the banner and the sheet: it is asking
           for something, so it must not sit under the thing it is asking about,

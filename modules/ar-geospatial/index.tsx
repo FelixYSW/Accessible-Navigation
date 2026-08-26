@@ -142,6 +142,56 @@ export interface PreviewState {
   placed: number;
 }
 
+/** A run of durations, in milliseconds.
+ *
+ *  Percentiles rather than a mean: a latency budget is about the slow tail,
+ *  and inference that is usually quick and occasionally terrible averages out
+ *  to something that reads as fine and does not feel it. */
+export interface DurationStats {
+  count: number;
+  meanMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+}
+
+/** How often something happened: since the screen opened, and over the last
+ *  second. The average is the figure to report; the instantaneous one is how
+ *  you tell whether it has settled. */
+export interface RateStats {
+  count: number;
+  current: number;
+  average: number;
+}
+
+/** What the screen is costing, measured on the device.
+ *
+ *  `render` is frames SceneKit actually presented - the number the frame-rate
+ *  requirement is about. `frames` is frames the camera delivered, which holds
+ *  its cadence whatever the app does with them. `frameWork` is how long the
+ *  native view then spent before returning, which is what turns the second
+ *  into the first.
+ *
+ *  The hazard screen sends no `render`: its preview is a capture layer the
+ *  system composites, so nothing the app does can drop one of its frames. */
+export interface PerformanceEvent {
+  screen: 'ar' | 'hazard';
+  render?: RateStats;
+  frames: RateStats;
+  frameWork?: DurationStats;
+  detector?: {
+    /** Wall clock around Vision's `perform`, so it includes preprocessing and
+     *  the NMS layer built into the Core ML graph, and excludes this app's own
+     *  decoding of the results. */
+    inference: DurationStats;
+    rate: RateStats;
+    /** The rate the detector throttles itself to, for comparison against the
+     *  rate it actually achieved. */
+    throttleHz: number;
+    unthrottled: boolean;
+  };
+}
+
 export interface ARGeospatialViewProps extends ViewProps {
   /** Both optional because `previewMode` needs neither: it plants its run on
    *  ARKit anchors from a tap, so there is no route to anchor and no Geospatial
@@ -174,6 +224,15 @@ export interface ARGeospatialViewProps extends ViewProps {
   onHazards?: (event: { nativeEvent: HazardsEvent }) => void;
   /** Preview mode only. Fires when the answer changes, not per frame. */
   onPreviewState?: (event: { nativeEvent: PreviewState }) => void;
+  /** Measured frame rate and inference cost, once a second. */
+  onPerformance?: (event: { nativeEvent: PerformanceEvent }) => void;
+  /** Runs the hazard model on every frame instead of at its throttled rate.
+   *
+   *  For measuring what the model can do rather than what it is being asked to
+   *  do - without it the throughput figure is pinned at the throttle by
+   *  construction, and a measurement that can only report the constant it was
+   *  given is not evidence that the constant was a choice. */
+  benchmarkMode?: boolean;
 }
 
 export interface HazardCameraViewProps extends ViewProps {
@@ -182,6 +241,10 @@ export interface HazardCameraViewProps extends ViewProps {
    *  another screen. */
   isActive?: boolean;
   onHazards?: (event: { nativeEvent: HazardsEvent }) => void;
+  /** Measured frame rate and inference cost, once a second. */
+  onPerformance?: (event: { nativeEvent: PerformanceEvent }) => void;
+  /** See the note on `ARGeospatialViewProps.benchmarkMode`. */
+  benchmarkMode?: boolean;
 }
 
 /** Whether this platform has the native view at all. Callers check it to pick

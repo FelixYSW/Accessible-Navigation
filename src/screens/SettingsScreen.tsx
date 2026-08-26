@@ -48,6 +48,8 @@ export function SettingsScreen() {
     setDarkMode,
     setSpokenTurns,
     setHazardCues,
+    showPerformance,
+    setShowPerformance,
     setMobilityAid,
     toggleHazard,
     setAllHazards,
@@ -134,6 +136,30 @@ export function SettingsScreen() {
             value={hazardCues}
             onValueChange={setHazardCues}
             accessibilityLabel="Hazard Cues"
+            {...switchColors}
+          />
+        </View>
+      </View>
+
+      {/* A developer switch rather than a feature, and last so it reads as one.
+          It is here at all because the numbers it shows have to be gathered on
+          a real walk, and a sideloaded build cannot have a profiler attached to
+          it. Off by default, so a demonstration is not covered in diagnostics. */}
+      <SectionLabel>Diagnostics</SectionLabel>
+      <View style={[styles.sectionCard, { backgroundColor: T.card }]}>
+        <View style={[styles.row, styles.rowInline]}>
+          <View style={styles.rowTextBlock}>
+            <Text style={[styles.rowTitle, { color: T.text, fontSize: F.body }]}>
+              Performance Readout
+            </Text>
+            <Text style={[styles.rowSubtitle, { color: T.text2, fontSize: F.tinySm }]}>
+              Shows measured frame rate and hazard model timing on the camera screens
+            </Text>
+          </View>
+          <Switch
+            value={showPerformance}
+            onValueChange={setShowPerformance}
+            accessibilityLabel="Performance Readout"
             {...switchColors}
           />
         </View>

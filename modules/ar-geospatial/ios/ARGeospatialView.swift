@@ -8,6 +8,10 @@ import ARCoreGARSession
 import ARCoreGeospatial
 import ARKit
 import ExpoModulesCore
+// CACurrentMediaTime, for the measurement. SceneKit pulls QuartzCore in, but the
+// same argument applies as in HazardDetector: a transitive import is someone
+// else's decision to change.
+import QuartzCore
 // ARKit vends ARSCNView but the scene graph types it is filled with - SCNNode,
 // SCNGeometry, the materials - are SceneKit's own module.
 import SceneKit
@@ -347,20 +351,28 @@ enum GroundPath {
   /// enough to see is a correction large enough to rebuild for.
   static let rebuildMoveM: Float = 0.05
 
-  /// How tall the destination pin stands, in metres, at the range it is drawn
-  /// true - see `pinScreenLockNearM`.
+  /// The smallest the pin is ever built: a person at eye level.
   ///
-  /// Waist height was a guess and too small by more than half. A map pin is not
-  /// a bollard: it is signage, and signage meant to be read down a street is head
-  /// height or better. At a metre it came out nineteen points tall at thirty-three
-  /// metres, which is shorter than the label hanging above it.
-  /// `pinScreenLockNearM`.
+  /// The floor under the rule in `pinHeight`, and the size the marker settles to
+  /// once the walker is standing on top of it. Something at the height of your
+  /// own eyes is the most readable thing a marker can be at close range - it is
+  /// the size the street is already full of.
+  static let pinLifeSizeM: Float = 1.7
+
+  /// How big the pin looks while it is far enough away to need the help: its
+  /// height divided by its distance.
   ///
-  /// A metre was a guess and too small by more than half. A map pin is not a
-  /// bollard: it is signage, and signage meant to be read down a street is head
-  /// height or better. At a metre it was nineteen points tall at thirty-three
-  /// metres, which is smaller than the label hanging above it.
-  static let pinHeightM: Float = 2.2
+  /// A ratio rather than a height, because what matters at range is the angle the
+  /// marker subtends, not how many metres of it there are. Held constant, the pin
+  /// is the same size to look at from sixty metres as from six - which is the
+  /// whole job of a destination marker, and the opposite of what an honestly
+  /// scaled object does.
+  ///
+  /// At 0.6 it stands a little under half the height of the screen, at any range
+  /// where the rule is in force. This is the one number to change if it should be
+  /// bigger or smaller: the pin's height on screen is very nearly this times the
+  /// screen's height, and nothing else about the pin needs touching.
+  static let pinApparentSize: Float = 0.6
 
   /// The pin's outline, in the 24-by-36 unit space it is drawn in: the tip at
   /// the origin, a bulb of radius 12 centred 24 above it, and a hole of radius
@@ -427,30 +439,6 @@ enum GroundPath {
   /// exactly the moment it is meant to say "this one".
   static let pinNearCutM: Float = 0.6
 
-  /// How near and how far the pin holds its size on screen.
-  ///
-  /// Between these two it is a plain object a fixed number of metres tall, and
-  /// behaves like one: nearer is bigger. Outside them its height in metres is
-  /// scaled by distance, which holds its height *on screen* instead.
-  ///
-  /// The far end is the one that had to be fixed. A two-metre pin at thirty-three
-  /// metres is forty points tall on a screen eight hundred and fifty points high -
-  /// correct perspective, and useless, because the whole job of the marker is to
-  /// be picked out at the far end of the street. Growing it with range keeps it
-  /// the same size to look at wherever it is.
-  ///
-  /// The near end guards the opposite failure and is the reason this is a window
-  /// rather than a single threshold: true perspective on a pin at arm's length is
-  /// a red slab across the frame, hiding the pavement at the exact moment the
-  /// walker is stepping onto it.
-  ///
-  /// This is the size cap the overlay version had, which was removed for reading
-  /// as the pin shrinking on approach - and it deserved to be. The difference is
-  /// that this is no longer a cap: it is applied at both ends and in world units,
-  /// so what is held is the angle the pin subtends. Nothing stops and starts.
-  static let pinScreenLockNearM: Float = 6
-  static let pinScreenLockFarM: Float = 14
-
   /// The contact shadow under the pin, as a fraction of its height, and how
   /// dark its centre is.
   ///
@@ -459,6 +447,20 @@ enum GroundPath {
   /// picture rather than placed in it.
   static let pinShadowRadiusFraction: Float = 0.35
   static let pinShadowOpacity: CGFloat = 0.38
+
+  /// And how wide it is allowed to get, whatever the pin is doing.
+  ///
+  /// The one place the shadow is deliberately not in proportion. A pin held at a
+  /// constant apparent size is thirty-six metres tall by the time it is sixty
+  /// metres away, and a shadow in proportion to that is a twenty-five metre pool
+  /// of black laid across the road - over the chevrons the walker is meant to be
+  /// following.
+  ///
+  /// The inconsistency costs nothing because of where a contact shadow is read.
+  /// It says "this is standing here rather than floating", and that is a claim
+  /// about the tip, settled in the last few metres. At sixty metres the shadow is
+  /// a handful of points across either way.
+  static let pinShadowMaxRadiusM: Float = 1.0
 }
 
 /// An ARKit camera preview whose frames are also fed to ARCore's Geospatial
@@ -482,6 +484,24 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   let onAnchorsUpdate = EventDispatcher()
   let onHazards = EventDispatcher()
   let onPreviewState = EventDispatcher()
+  let onPerformance = EventDispatcher()
+
+  /// What the screen is costing, measured rather than argued.
+  ///
+  /// Three separate numbers, and they are not interchangeable. `renderRate` is
+  /// what the walker sees - SceneKit presenting a frame. `frameRate` is ARKit
+  /// offering one. `frameWork` is how long this class then spends on the main
+  /// thread before giving it back, which is the quantity that turns the second
+  /// number into the first.
+  ///
+  /// They are read from two threads: SceneKit renders on its own, and the
+  /// session delegate is called on the main one, because no `delegateQueue` was
+  /// set on it. Hence the lock.
+  private var renderRate = RateCounter()
+  private var frameRate = RateCounter()
+  private var frameWork = DurationSampler()
+  private let perfLock = NSLock()
+  private var lastPerformanceSent: CFTimeInterval = 0
 
   /// The same detector the Hazard Detection screen runs, fed from ARKit's
   /// frames instead of an AVFoundation session. ARKit owns the camera on this
@@ -964,6 +984,28 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   }
 
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    // Timed as a whole, because the whole of it is main-thread time.
+    //
+    // ARKit calls this on the main thread - no `delegateQueue` is set on the
+    // session - and everything below runs to completion before the run loop is
+    // given back. Hazard inference is inside it and is synchronous, so on this
+    // screen the model's cost is subtracted directly from the renderer's budget.
+    // At sixty frames a second there are sixteen milliseconds to spend.
+    //
+    // The hazard screen does not work this way: it hands frames to its own
+    // capture queue. Measuring both is what makes the comparison mean anything.
+    var elapsed: Double = 0
+    measuring({ elapsed = $0 }) { handleFrame(frame) }
+
+    perfLock.lock()
+    frameRate.tick()
+    frameWork.record(elapsed)
+    perfLock.unlock()
+
+    emitPerformanceIfDue()
+  }
+
+  private func handleFrame(_ frame: ARFrame) {
     placeLocalAnchorsIfNeeded(frame: frame)
     detectHazards(in: frame)
 
@@ -989,6 +1031,43 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   }
 
   // MARK: - Occlusion
+
+  /// Called once per presented frame, on SceneKit's own render thread.
+  ///
+  /// This is the frame rate the requirement is about. Counting ARKit's delivery
+  /// instead would measure the camera, which keeps its cadence whatever the app
+  /// does with it - a screen frozen behind a blocked main thread still receives
+  /// sixty frames a second and shows none of them.
+  func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+    perfLock.lock()
+    renderRate.tick(at: time)
+    perfLock.unlock()
+  }
+
+  /// A snapshot a second, which is as often as a number on screen can be read.
+  private func emitPerformanceIfDue() {
+    let now = CACurrentMediaTime()
+    guard now - lastPerformanceSent >= 1 else { return }
+    lastPerformanceSent = now
+
+    perfLock.lock()
+    var payload: [String: Any] = [
+      "render": renderRate.dictionary,
+      "frames": frameRate.dictionary,
+    ]
+    if let work = frameWork.summary { payload["frameWork"] = work.dictionary }
+    perfLock.unlock()
+
+    payload["screen"] = "ar"
+    if let detector = detector.performance() { payload["detector"] = detector }
+    onPerformance(payload)
+  }
+
+  /// Runs the model flat out instead of at its throttled rate, so the ceiling
+  /// can be measured rather than assumed. See `HazardDetector.setUnthrottled`.
+  func setBenchmarking(_ on: Bool) {
+    detector.setUnthrottled(on)
+  }
 
   func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
     applyOccluder(to: node, for: anchor)
@@ -1654,17 +1733,27 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
 
   /// How tall to build the pin for something this far away.
   ///
-  /// Its true height between the two lock distances, and scaled by range outside
-  /// them so that what stays constant there is its size on screen rather than its
-  /// size in the world. See `pinScreenLockNearM`.
+  /// Enormous at range and life-size underfoot, with one line doing both.
+  ///
+  /// Far off, height is a fixed fraction of distance, which is the same as saying
+  /// the pin holds its apparent size - eighteen metres tall at thirty, six at ten,
+  /// three at five, all of them the same mark on the screen. That is not what an
+  /// object does and it is exactly what a marker should: the thing being pointed
+  /// at does not get less important for being further away.
+  ///
+  /// The floor is what stops it there. Once the rule would build something shorter
+  /// than a person - inside about three metres - the pin stops shrinking and
+  /// becomes an object again, standing at eye level on the pavement. From then on
+  /// it behaves honestly, growing as it is approached, because at that range there
+  /// is nothing left to help with: the walker is on top of it.
+  ///
+  /// The previous rule held the *screen* size at close range instead, by shrinking
+  /// the pin below life-size as the walker closed in. It kept the marker a
+  /// convenient size and made it a doll's-house prop at the moment of arrival,
+  /// which is the moment it most needs to read as a real thing standing in a real
+  /// place.
   private func pinHeight(at distance: Float) -> Float {
-    if distance < GroundPath.pinScreenLockNearM {
-      return GroundPath.pinHeightM * (distance / GroundPath.pinScreenLockNearM)
-    }
-    if distance > GroundPath.pinScreenLockFarM {
-      return GroundPath.pinHeightM * (distance / GroundPath.pinScreenLockFarM)
-    }
-    return GroundPath.pinHeightM
+    max(GroundPath.pinLifeSizeM, distance * GroundPath.pinApparentSize)
   }
 
   /// How far a point is from the camera across the ground.
@@ -1703,7 +1792,9 @@ final class ARGeospatialView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     let height = pinHeight(at: distance)
 
     if let shadow = shadowImage() {
-      let radius = CGFloat(height * GroundPath.pinShadowRadiusFraction)
+      let radius = CGFloat(
+        min(GroundPath.pinShadowMaxRadiusM, height * GroundPath.pinShadowRadiusFraction)
+      )
       let disc = SCNPlane(width: radius * 2, height: radius * 2)
       let material = SCNMaterial()
       material.lightingModel = .constant

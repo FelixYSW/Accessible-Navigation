@@ -27,6 +27,13 @@ export interface Preferences {
   mobilityAid: MobilityAid;
   /** Which hazard classes the user wants routed around and flagged. */
   hazardActive: Record<HazardClass, boolean>;
+  /** Shows the measured frame rate and inference cost on the camera screens.
+   *
+   *  A developer switch rather than a feature, kept here because the numbers
+   *  it shows have to be gathered while walking a real route and there is no
+   *  way to attach a profiler to a sideloaded build. Off by default, so a
+   *  demonstration is not covered in diagnostics. */
+  showPerformance: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -35,6 +42,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   spokenTurns: true,
   hazardCues: true,
   mobilityAid: 'none',
+  showPerformance: false,
   hazardActive: {
     pothole: true,
     'slippery-surface': true,
@@ -66,6 +74,7 @@ interface SettingsValue extends Preferences {
   setDarkMode: (value: boolean) => void;
   setSpokenTurns: (value: boolean) => void;
   setHazardCues: (value: boolean) => void;
+  setShowPerformance: (value: boolean) => void;
   setMobilityAid: (value: MobilityAid) => void;
   toggleHazard: (hazardClass: HazardClass) => void;
   /** Sets every hazard type at once - the master switch behind the Settings
@@ -144,6 +153,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       setDarkMode: (darkMode) => update({ darkMode }),
       setSpokenTurns: (spokenTurns) => update({ spokenTurns }),
       setHazardCues: (hazardCues) => update({ hazardCues }),
+      setShowPerformance: (showPerformance) => update({ showPerformance }),
       setMobilityAid: (mobilityAid) => update({ mobilityAid }),
       toggleHazard: (hazardClass) =>
         setPreferences((current) => ({

@@ -1,5 +1,9 @@
 import AVFoundation
 import ExpoModulesCore
+// CACurrentMediaTime and CFTimeInterval, used by the measurement below.
+// AVFoundation happens to pull QuartzCore in, but relying on that would make
+// the build depend on someone else's import list.
+import QuartzCore
 
 /// A plain camera preview that runs the hazard model over its frames.
 ///
@@ -13,6 +17,18 @@ import ExpoModulesCore
 /// hazard the same way.
 final class HazardCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferDelegate {
   let onHazards = EventDispatcher()
+  let onPerformance = EventDispatcher()
+
+  /// How fast frames arrive, and how long this class holds one.
+  ///
+  /// The comparison against the AR screen is the point of measuring here at all.
+  /// Both run the same model on the same device; the difference is that this one
+  /// is on `frameQueue` and that one is on the main thread. Whatever the two
+  /// report, the gap between them is attributable to that and to little else.
+  private var frameRate = RateCounter()
+  private var frameWork = DurationSampler()
+  private let perfLock = NSLock()
+  private var lastPerformanceSent: CFTimeInterval = 0
 
   private let session = AVCaptureSession()
   private let output = AVCaptureVideoDataOutput()
@@ -121,9 +137,43 @@ final class HazardCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferDele
 
     // The app is portrait-locked and this is the back camera, whose buffers
     // arrive rotated a quarter turn from how they are displayed.
-    detector.detect(pixelBuffer: pixelBuffer, orientation: .right) { [weak self] hazards in
-      self?.onHazards(["hazards": hazards])
+    var elapsed: Double = 0
+    measuring({ elapsed = $0 }) {
+      detector.detect(pixelBuffer: pixelBuffer, orientation: .right) { [weak self] hazards in
+        self?.onHazards(["hazards": hazards])
+      }
     }
+
+    perfLock.lock()
+    frameRate.tick()
+    frameWork.record(elapsed)
+    perfLock.unlock()
+
+    emitPerformanceIfDue()
+  }
+
+  /// A snapshot a second, on the capture queue.
+  ///
+  /// There is no render-thread figure to report here, unlike the AR screen: the
+  /// preview is a capture layer the system composites itself, so nothing this
+  /// class does can drop one of its frames. That absence is the finding.
+  private func emitPerformanceIfDue() {
+    let now = CACurrentMediaTime()
+    guard now - lastPerformanceSent >= 1 else { return }
+    lastPerformanceSent = now
+
+    perfLock.lock()
+    var payload: [String: Any] = ["frames": frameRate.dictionary]
+    if let work = frameWork.summary { payload["frameWork"] = work.dictionary }
+    perfLock.unlock()
+
+    payload["screen"] = "hazard"
+    if let detector = detector.performance() { payload["detector"] = detector }
+    onPerformance(payload)
+  }
+
+  func setBenchmarking(_ on: Bool) {
+    detector.setUnthrottled(on)
   }
 
   /// Sent once. A model that failed to load will fail identically on every

@@ -6,6 +6,8 @@ import { useIsFocused } from '@react-navigation/native';
 import { HazardCameraView, isARGeospatialSupported } from '../../modules/ar-geospatial';
 import { CameraStage } from '../components/CameraStage';
 import { HazardOverlay } from '../components/HazardOverlay';
+import { PerformanceHud } from '../components/PerformanceHud';
+import { usePerformanceReadout } from '../services/performance';
 import { HazardIntro } from '../components/HazardIntro';
 import { HazardTypeBar } from '../components/HazardTypeBar';
 import { VoiceCueBar } from '../components/VoiceCueBar';
@@ -21,7 +23,12 @@ export function HazardDetectionScreen() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const isFocused = useIsFocused();
-  const { F, hazardActive, hazardCues } = useSettings();
+  const { F, hazardActive, hazardCues, showPerformance } = useSettings();
+
+  // This screen is the control in the comparison: it runs the same model on the
+  // same device, but hands frames to its own capture queue instead of doing the
+  // work on the main thread the way the AR screen does.
+  const performance = usePerformanceReadout(showPerformance);
 
   const activeClasses = useMemo(
     () => HAZARD_CLASSES.filter((hazardClass) => hazardActive[hazardClass]),
@@ -60,12 +67,22 @@ export function HazardDetectionScreen() {
       style={StyleSheet.absoluteFill}
       isActive={isFocused}
       onHazards={onHazards}
+      onPerformance={performance.onPerformance}
+      benchmarkMode={performance.benchmarkMode}
     />
   ) : undefined;
 
   return (
     <CameraStage isActive={isFocused} surface={surface}>
       <HazardOverlay detections={detections} />
+
+      {showPerformance ? (
+        <PerformanceHud
+          reading={performance.reading}
+          benchmarking={performance.benchmarking}
+          onToggleBenchmark={performance.toggleBenchmark}
+        />
+      ) : null}
 
       <View style={[styles.topRow, { top: insets.top + 4 }]}>
         <HazardTypeBar />

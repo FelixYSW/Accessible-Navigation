@@ -14,7 +14,13 @@ public class ARGeospatialModule: Module {
     // module-level one and does not compile here.
     View(ARGeospatialView.self) {
       ViewName("ARGeospatialView")
-      Events("onGeospatialUpdate", "onAnchorsUpdate", "onHazards", "onPreviewState")
+      Events(
+        "onGeospatialUpdate",
+        "onAnchorsUpdate",
+        "onHazards",
+        "onPreviewState",
+        "onPerformance"
+      )
 
       // The Cloud API key with the ARCore API enabled on it. Passed in from JS
       // rather than read from the Info.plist so it keeps coming from the same
@@ -38,6 +44,14 @@ public class ARGeospatialModule: Module {
       // How wide the chevrons are drawn. Worked out in JS because the things
       // it depends on live there - the route line, the walker's offset from
       // it, and what the pose says about its own accuracy.
+      // Runs the hazard model on every frame instead of ten a second, so a
+      // benchmark can report the model's ceiling rather than the rate the app
+      // chooses for it. Not a mode to walk around in - see the note on
+      // HazardDetector.setUnthrottled.
+      Prop("benchmarkMode") { (view: ARGeospatialView, on: Bool) in
+        view.setBenchmarking(on)
+      }
+
       Prop("guidanceWidthM") { (view: ARGeospatialView, width: Double) in
         view.setGuidanceWidth(Float(width))
       }
@@ -65,7 +79,14 @@ public class ARGeospatialModule: Module {
     // the AR session it has no use for.
     View(HazardCameraView.self) {
       ViewName("HazardCameraView")
-      Events("onHazards")
+      Events("onHazards", "onPerformance")
+
+      // Runs the model on every frame instead of ten a second, so the
+      // measurement can report what the model can do rather than what it is
+      // being asked to do. See `HazardDetector.setUnthrottled`.
+      Prop("benchmarkMode") { (view: HazardCameraView, on: Bool) in
+        view.setBenchmarking(on)
+      }
 
       Prop("isActive") { (view: HazardCameraView, active: Bool) in
         view.setIsActive(active)

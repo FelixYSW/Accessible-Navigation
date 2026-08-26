@@ -31,6 +31,23 @@ final class HazardDetector {
   private var inFlight = false
   private let lock = NSLock()
 
+  /// What one call to Vision costs, and how often one actually happens.
+  ///
+  /// Guarded by the same lock as the throttle, because both hosts call in from
+  /// their own thread - the AR screen from the main one, the hazard screen from
+  /// its capture queue - and a sampler is not thread-safe on its own.
+  private var inferenceTime = DurationSampler()
+  private var inferenceRate = RateCounter()
+
+  /// Runs the model on every frame offered, ignoring `minimumInterval`.
+  ///
+  /// For measuring the ceiling rather than the rate the app chooses. Without it
+  /// the throughput figure is pinned at ten a second by construction, and a
+  /// measurement that can only report the constant it was given is not evidence
+  /// that ten was a choice. It is not a mode to walk around in: it is the one
+  /// that competes hardest with ARKit for the same cores.
+  private var unthrottled = false
+
   /// Why there is no model, if there is no model. Surfaced to JS so a missing
   /// or broken file reads as "model not installed" rather than as a camera that
   /// silently never finds anything.
@@ -122,6 +139,32 @@ final class HazardDetector {
     }
   }
 
+  // MARK: - Measurement
+
+  /// Turns the throttle off, for a benchmark run.
+  func setUnthrottled(_ on: Bool) {
+    lock.lock()
+    unthrottled = on
+    lock.unlock()
+  }
+
+  /// What the model has cost so far, for the JS layer to display.
+  ///
+  /// Nil until the first inference has finished, so a reader can tell "not
+  /// measured yet" from "measured, and zero".
+  func performance() -> [String: Any]? {
+    lock.lock()
+    defer { lock.unlock() }
+
+    guard let summary = inferenceTime.summary else { return nil }
+    return [
+      "inference": summary.dictionary,
+      "rate": inferenceRate.dictionary,
+      "throttleHz": minimumInterval > 0 ? 1 / minimumInterval : 0,
+      "unthrottled": unthrottled,
+    ]
+  }
+
   // MARK: - Inference
 
   /// Runs the model if it is time to, and does nothing at all if it is not.
@@ -138,7 +181,8 @@ final class HazardDetector {
 
     lock.lock()
     let now = Date()
-    let ready = !inFlight && now.timeIntervalSince(lastRun) >= minimumInterval
+    let due = unthrottled || now.timeIntervalSince(lastRun) >= minimumInterval
+    let ready = !inFlight && due
     if ready {
       inFlight = true
       lastRun = now
@@ -148,15 +192,37 @@ final class HazardDetector {
     guard ready else { return }
 
     let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation)
+
+    // Timed around `perform` alone, and deliberately not around the decode below
+    // it. What is wanted is the model's cost - preprocessing, the Neural Engine,
+    // and the NMS layer that was built into the graph at export - not the cost of
+    // turning observations into dictionaries, which is this file's own overhead
+    // and would flatter or damn the model for something it did not do.
+    //
+    // Wall clock, so a sample includes any moment this thread spent waiting to be
+    // scheduled. On the AR screen that is the whole point: this runs on the main
+    // thread, so what it costs is what the renderer does not get.
+    var elapsed: Double = 0
     do {
-      try handler.perform([request])
-      completion(Self.hazards(from: request.results))
+      let results = try measuring({ elapsed = $0 }) { () -> [VNObservation]? in
+        try handler.perform([request])
+        return request.results
+      }
+      recordInference(elapsed)
+      completion(Self.hazards(from: results))
     } catch {
       completion([])
     }
 
     lock.lock()
     inFlight = false
+    lock.unlock()
+  }
+
+  private func recordInference(_ seconds: Double) {
+    lock.lock()
+    inferenceTime.record(seconds)
+    inferenceRate.tick()
     lock.unlock()
   }
 
