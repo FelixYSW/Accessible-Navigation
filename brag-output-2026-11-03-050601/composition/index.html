@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>Accessible Navigation - brag</title>
+<style>
+  :root{--bg:#121212;--card:#1e1e1e;--card2:#262626;--tx:#e0e0e0;--mut:#a6a6a6;--ac:#1f6dd8;--acl:#6aa5ff;--gr:#30d158;--rd:#ff453a;--am:#ff9f0a}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:1920px;height:1080px;background:var(--bg);overflow:hidden}
+  body{font-family:"SF Pro Display","Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif;color:var(--tx)}
+  #root{position:relative;width:1920px;height:1080px;background:var(--bg);overflow:hidden}
+  #glow{position:absolute;inset:0;z-index:0;opacity:.12;background:radial-gradient(circle at 50% 58%,rgba(31,109,216,.55),rgba(31,109,216,0) 62%)}
+  .scene{position:absolute;inset:0;z-index:1;opacity:0}
+  .abs{position:absolute}
+  .c{left:0;width:1920px;text-align:center}
+  .mut{color:var(--mut)}
+  .o0{opacity:0}
+  /* S1 */
+  .l1{top:262px;font-size:88px;font-weight:500;letter-spacing:-1px}
+  .l2{top:384px;font-size:88px;font-weight:700;letter-spacing:-1px}
+  .l2 b{color:var(--am)}
+  .pills{position:absolute;top:640px;left:0;width:1920px;display:flex;justify-content:center;gap:44px}
+  .pill{display:flex;align-items:center;gap:22px;padding:26px 44px;border-radius:999px;background:var(--card2);border:2px solid #3a3a3a;font-size:60px;font-weight:600;opacity:0}
+  .pill svg{width:54px;height:54px}
+  /* S2 */
+  .osm{top:238px;font-size:40px;letter-spacing:8px;text-transform:uppercase;color:var(--mut);font-weight:600}
+  .big{top:318px;font-size:250px;font-weight:700;letter-spacing:-6px;line-height:1;font-variant-numeric:tabular-nums}
+  .cap2{top:648px;font-size:60px;font-weight:500}
+  #net{position:absolute;left:0;top:0}
+  /* S3 */
+  .card{position:absolute;background:var(--card);border:2px solid #333;border-radius:32px;opacity:0}
+  .sname{left:48px;top:44px;font-size:46px;font-weight:600}
+  .smeta{left:48px;top:110px;font-size:44px;font-weight:600;color:var(--tx)}
+  .smeta span{color:var(--acl)}
+  .lbl{font-size:30px;color:var(--mut);letter-spacing:1px}
+  .chips{position:absolute;left:48px;top:268px;width:664px;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .chip{height:96px;border-radius:26px;background:var(--card2);border:2px solid #3d3d3d;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:600;color:var(--tx)}
+  .vrow{left:48px;top:112px;display:flex;align-items:center;gap:26px;font-size:46px;font-weight:600}
+  .vrow svg{width:72px;height:72px}
+  .verdict{position:absolute;left:48px;top:268px;width:664px;border-radius:28px;padding:34px 36px;display:flex;align-items:center;gap:26px;font-size:50px;font-weight:700;opacity:0;line-height:1.1}
+  .verdict svg{width:76px;height:76px;flex:none}
+  .vbad{background:#2a1513;border:3px solid var(--rd);color:#ff6b61}
+  .vgood{background:#122a19;border:3px solid var(--gr);color:#4ae070}
+  /* S4 */
+  #ar{position:absolute;left:0;top:0}
+  .t1{top:96px;font-size:68px;font-weight:700;letter-spacing:-1px}
+  .t2{top:196px;font-size:42px;font-weight:500;color:var(--mut)}
+  /* S5 */
+  .cap5{top:92px;font-size:62px;font-weight:600}
+  #frame{position:absolute;left:260px;top:210px;width:1400px;height:740px;border-radius:30px;overflow:hidden;border:2px solid #3a3a3a;background:#1a1d21}
+  .hb{position:absolute;border:7px solid;border-radius:12px;opacity:0}
+  .tag{position:absolute;left:-7px;top:-62px;height:56px;padding:0 18px 0 12px;border-radius:12px 12px 12px 0;display:flex;align-items:center;gap:10px;font-size:30px;font-weight:700;color:#111;white-space:nowrap}
+  .tag svg{width:28px;height:28px}
+  /* S6 */
+  .name{top:470px;font-size:116px;font-weight:700;letter-spacing:-2px}
+  .tag6{top:632px;font-size:54px;font-weight:500;color:var(--mut)}
+  #cover{position:absolute;inset:0;z-index:9;background:var(--bg);opacity:0}
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="root" data-start="0" data-duration="25" data-width="1920" data-height="1080">
+
+  <div id="glow"></div>
+
+  <!-- SCENE 1: hook -->
+  <section id="s1" class="scene clip" data-start="0" data-duration="5.4">
+    <div class="abs c l1 o0" id="l1">Asked for a 763 m walk,</div>
+    <div class="abs c l2 o0" id="l2">Google offered <b>8.0 km.</b></div>
+    <div class="pills">
+      <div class="pill" id="p1"><svg viewBox="0 0 54 54" fill="none" stroke="#a6a6a6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 44 C 8 20, 30 36, 30 18 S 40 8, 46 10"/></svg>8.0 km</div>
+      <div class="pill" id="p2"><svg viewBox="0 0 54 54" fill="none" stroke="#a6a6a6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 44 C 8 20, 30 36, 30 18 S 40 8, 46 10"/></svg>8.5 km</div>
+      <div class="pill" id="p3"><svg viewBox="0 0 54 54" fill="none" stroke="#a6a6a6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 44 C 8 20, 30 36, 30 18 S 40 8, 46 10"/></svg>10.0 km</div>
+    </div>
+  </section>
+
+  <!-- SCENE 2: footways -->
+  <section id="s2" class="scene clip" data-start="5" data-duration="5.0">
+    <svg id="net" data-layout-allow-overflow width="1920" height="1080" viewBox="0 0 1920 1080"></svg>
+    <div class="abs c osm o0" id="osm">OpenStreetMap</div>
+    <div class="abs c big" id="cnt">0</div>
+    <div class="abs c cap2 o0" id="cap2">footways in the same area</div>
+  </section>
+
+  <!-- SCENE 3: flow -->
+  <section id="s3" class="scene clip" data-start="9.83" data-duration="5.86">
+    <div class="card" id="search" style="left:160px;top:200px;width:760px;height:620px">
+      <div class="abs sname">Pavilion Kuala Lumpur</div>
+      <div class="abs smeta"><span>~416 m · 11 min</span></div>
+      <div class="abs lbl" style="left:48px;top:214px">Mobility aid</div>
+      <div class="chips">
+        <div class="chip" id="ch0">None</div>
+        <div class="chip" id="ch1">Wheelchair</div>
+        <div class="chip" id="ch2">Cane</div>
+        <div class="chip" id="ch3">Walker</div>
+      </div>
+    </div>
+    <div class="card" id="screen" style="left:1000px;top:200px;width:760px;height:620px">
+      <div class="abs lbl" style="left:48px;top:44px">Barrier screening</div>
+      <div class="abs vrow">
+        <svg viewBox="0 0 72 72" fill="none" stroke="#e0e0e0" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"><path d="M8 62 H24 V48 H40 V34 H56 V20 H66"/><path d="M14 40 L60 8" stroke="#a6a6a6"/></svg>
+        <span>Steps with a handrail</span>
+      </div>
+      <div class="verdict vbad" id="vbad">
+        <svg viewBox="0 0 76 76" fill="none" stroke="#ff6b61" stroke-width="8" stroke-linecap="round"><circle cx="38" cy="38" r="30"/><path d="M26 26 L50 50 M50 26 L26 50"/></svg>
+        <span>Not passable in a wheelchair</span>
+      </div>
+      <div class="verdict vgood" id="vgood">
+        <svg viewBox="0 0 76 76" fill="none" stroke="#4ae070" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><circle cx="38" cy="38" r="30"/><path d="M24 39 L34 49 L53 27"/></svg>
+        <span>Passable with a cane</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCENE 4: AR chevrons -->
+  <section id="s4" class="scene clip" data-start="15.29" data-duration="3.67">
+    <svg id="ar" width="1920" height="1080" viewBox="0 0 1920 1080"></svg>
+    <div class="abs c t1 o0" id="t1">Guidance is geometry, not an overlay.</div>
+    <div class="abs c t2 o0" id="t2">Grey behind, green ahead.</div>
+  </section>
+
+  <!-- SCENE 5: hazards -->
+  <section id="s5" class="scene clip" data-start="18.56" data-duration="3.68">
+    <div class="abs c cap5 o0" id="cap5">Four classes. On-device. 10 Hz.</div>
+    <div id="frame">
+      <svg width="1400" height="740" viewBox="0 0 1400 740" style="position:absolute;left:0;top:0">
+        <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a3038"/><stop offset="1" stop-color="#1c2025"/></linearGradient></defs>
+        <rect width="1400" height="300" fill="url(#sky)"/>
+        <polygon points="560,300 840,300 1400,740 0,740" fill="#2d2d2f"/>
+        <polygon points="0,300 560,300 0,560" fill="#3a3a3c"/>
+        <polygon points="840,300 1400,300 1400,560" fill="#3a3a3c"/>
+        <line x1="560" y1="300" x2="0" y2="560" stroke="#555" stroke-width="5"/>
+        <line x1="840" y1="300" x2="1400" y2="560" stroke="#555" stroke-width="5"/>
+        <line x1="700" y1="300" x2="700" y2="740" stroke="#444" stroke-width="6" stroke-dasharray="40 36"/>
+      </svg>
+      <div class="hb" data-layout-allow-overflow id="hb1" style="left:150px;top:420px;width:300px;height:180px;border-color:#FF3B30"><div class="tag" style="background:#FF3B30"><svg viewBox="0 0 28 28"><circle cx="14" cy="14" r="11" fill="#111"/></svg>Pothole</div></div>
+      <div class="hb" data-layout-allow-overflow id="hb2" style="left:520px;top:520px;width:340px;height:150px;border-color:#0A84FF"><div class="tag" style="background:#0A84FF"><svg viewBox="0 0 28 28"><path d="M14 2 C 22 12, 24 16, 24 19 a10 10 0 0 1 -20 0 C 4 16 6 12 14 2z" fill="#111"/></svg>Slippery surface</div></div>
+      <div class="hb" data-layout-allow-overflow id="hb3" style="left:930px;top:400px;width:300px;height:170px;border-color:#FFD60A"><div class="tag" style="background:#FFD60A"><svg viewBox="0 0 28 28" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20 L9 8 L15 20 L21 8 L25 14"/></svg>Uneven surface</div></div>
+      <div class="hb" data-layout-allow-overflow id="hb4" style="left:1000px;top:90px;width:260px;height:150px;border-color:#FF9F0A"><div class="tag" style="background:#FF9F0A"><svg viewBox="0 0 28 28"><path d="M14 3 L26 25 H2z" fill="#111"/></svg>Pathway obstruction</div></div>
+    </div>
+  </section>
+
+  <!-- SCENE 6: outro -->
+  <section id="s6" class="scene clip" data-start="21.84" data-duration="3.16">
+    <svg id="pin6" class="abs" style="left:900px;top:250px;opacity:0" width="120" height="170" viewBox="0 0 120 170">
+      <ellipse cx="60" cy="158" rx="30" ry="8" fill="#000" opacity=".5"/>
+      <path d="M60 150 C 20 100, 12 80, 12 58 a48 48 0 0 1 96 0 C 108 80, 100 100, 60 150z" fill="#1f6dd8"/>
+      <circle cx="60" cy="58" r="18" fill="#fff"/>
+    </svg>
+    <div class="abs c name o0" id="name">Accessible Navigation</div>
+    <div class="abs c tag6 o0" id="tag6">Know what the pavement is like.</div>
+  </section>
+
+  <div id="cover"></div>
+
+  <!-- AUDIO -->
+  <audio id="music" data-start="0" data-duration="25" data-track-index="10" data-volume="0.16" data-fade-in="0.5" data-fade-out="2" src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3"></audio>
+  <audio id="sx1" data-start="2.66" data-duration="1" data-track-index="11" data-volume="0.55" src="assets/sfx/interface/drop_001.ogg"></audio>
+  <audio id="sx2" data-start="3.2" data-duration="1" data-track-index="12" data-volume="0.55" src="assets/sfx/interface/drop_002.ogg"></audio>
+  <audio id="sx3" data-start="3.75" data-duration="1" data-track-index="13" data-volume="0.55" src="assets/sfx/interface/drop_003.ogg"></audio>
+  <audio id="sx4" data-start="8.66" data-duration="1" data-track-index="14" data-volume="0.7" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+  <audio id="sx5" data-start="10.9" data-duration="1" data-track-index="15" data-volume="0.6" src="assets/sfx/interface/click_003.ogg"></audio>
+  <audio id="sx6" data-start="13.08" data-duration="1" data-track-index="16" data-volume="0.6" src="assets/sfx/interface/click_003.ogg"></audio>
+  <audio id="sx7" data-start="17.42" data-duration="1" data-track-index="17" data-volume="0.7" src="assets/sfx/impact/impactSoft_medium_003.ogg"></audio>
+  <audio id="sx8" data-start="19.05" data-duration="1" data-track-index="18" data-volume="0.5" src="assets/sfx/interface/drop_001.ogg"></audio>
+  <audio id="sx9" data-start="19.61" data-duration="1" data-track-index="19" data-volume="0.5" src="assets/sfx/interface/drop_002.ogg"></audio>
+  <audio id="sx10" data-start="20.14" data-duration="1" data-track-index="20" data-volume="0.5" src="assets/sfx/interface/drop_003.ogg"></audio>
+  <audio id="sx11" data-start="20.7" data-duration="1" data-track-index="21" data-volume="0.5" src="assets/sfx/interface/drop_001.ogg"></audio>
+  <audio id="sx12" data-start="22.32" data-duration="1.5" data-track-index="22" data-volume="0.6" src="assets/sfx/interface/bong_001.ogg"></audio>
+
+  <script src="assets/gsap.min.js"></script>
+  <script>
+  (function(){
+    var NS='http://www.w3.org/2000/svg';
+    function el(tag,attrs,parent){var e=document.createElementNS(NS,tag);for(var k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+
+    /* ---- deterministic footway network (scene 2) ---- */
+    var seed=7;function rnd(){seed=(seed*16807)%2147483647;return (seed-1)/2147483646;}
+    var net=document.getElementById('net'),lines=[];
+    for(var i=0;i<95;i++){
+      var x=rnd()*1920,y=rnd()*1080,d='M'+x.toFixed(0)+' '+y.toFixed(0),dir=Math.floor(rnd()*4)*Math.PI/2+(rnd()-.5)*.5;
+      for(var j=0;j<4+Math.floor(rnd()*4);j++){var L=70+rnd()*150;x+=Math.cos(dir)*L;y+=Math.sin(dir)*L;d+=' L'+x.toFixed(0)+' '+y.toFixed(0);dir+=(rnd()<.5?1:-1)*(rnd()<.6?Math.PI/2:.35);}
+      lines.push(el('path',{d:d,fill:'none',stroke:'#30d158','stroke-width':3,'stroke-linecap':'round','stroke-linejoin':'round',opacity:0},net));
+    }
+
+    /* ---- AR ground, chevrons, pin (scene 4) ---- */
+    var ar=document.getElementById('ar'),HZ=330;
+    var defs=el('defs',{},ar),g=el('linearGradient',{id:'gnd',x1:0,y1:0,x2:0,y2:1},defs);
+    el('stop',{offset:0,'stop-color':'#1b1b1b'},g);el('stop',{offset:1,'stop-color':'#303030'},g);
+    el('polygon',{points:'790,'+HZ+' 1130,'+HZ+' 1920,1080 0,1080',fill:'url(#gnd)'},ar);
+    el('line',{x1:790,y1:HZ,x2:0,y2:1080,stroke:'#454545','stroke-width':4},ar);
+    el('line',{x1:1130,y1:HZ,x2:1920,y2:1080,stroke:'#454545','stroke-width':4},ar);
+    var chevs=[];
+    for(var k=0;k<9;k++){
+      var dd=k*0.95,p=1/(1+dd*0.5),cy=HZ+650*p,w=560*p,h=170*p,th=Math.max(5,58*p);
+      var grp=el('g',{opacity:0},ar);
+      el('polyline',{points:(960-w/2)+','+(cy+h/2)+' 960,'+(cy-h/2)+' '+(960+w/2)+','+(cy+h/2),fill:'none',stroke:k===0?'#6b6b6b':'#30d158','stroke-width':th,'stroke-linecap':'round','stroke-linejoin':'round'},grp);
+      chevs.push(grp);
+    }
+    var pinY=HZ+650*(1/(1+9.5*0.5))+4;
+    var pin=el('g',{opacity:0},ar);
+    el('ellipse',{cx:960,cy:pinY,rx:34,ry:9,fill:'#000',opacity:.55},pin);
+    el('path',{d:'M960 '+(pinY-4)+' C 930 '+(pinY-46)+', 924 '+(pinY-62)+', 924 '+(pinY-80)+' a36 36 0 0 1 72 0 C 996 '+(pinY-62)+', 990 '+(pinY-46)+', 960 '+(pinY-4)+'z',fill:'#1f6dd8'},pin);
+    el('circle',{cx:960,cy:pinY-80,r:13,fill:'#fff'},pin);
+    el('circle',{cx:960,cy:1010,r:24,fill:'none',stroke:'#e0e0e0','stroke-width':5,opacity:.0,id:'you'},ar);
+
+    /* ---- timeline ---- */
+    var tl=gsap.timeline({paused:true});
+    function up(sel,t,dur,y){tl.fromTo(sel,{opacity:0,y:y===undefined?26:y},{opacity:1,y:0,duration:dur||.5,ease:'power3.out'},t);}
+    function scene(sel,start,end,first){
+      if(!first)tl.fromTo(sel,{opacity:0},{opacity:1,duration:.4,ease:'none'},start);else tl.set(sel,{opacity:1},0);
+      tl.to(sel,{opacity:0,duration:.4,ease:'none'},end-.4);
+    }
+    scene('#s1',0,5.4,true);scene('#s2',5,10.0);scene('#s3',9.83,15.69);scene('#s4',15.29,18.96);scene('#s5',18.56,22.24);scene('#s6',21.84,25);
+
+    /* S1 */
+    tl.set('#l1',{opacity:1},0);up('#l2',1.6,.6);
+    [['#p1',2.73],['#p2',3.27],['#p3',3.82]].forEach(function(a){ // beat-grid: pills at 2.73 / 3.27 / 3.82
+      tl.fromTo(a[0],{opacity:0,y:30,scale:.94},{opacity:1,y:0,scale:1,duration:.4,ease:'power3.out'},a[1]);});
+
+    /* S2 */
+    up('#osm',5.4,.5,16);
+    lines.forEach(function(l,i){tl.fromTo(l,{opacity:0},{opacity:.2,duration:.5,ease:'none'},5.45+(i/lines.length)*3.1);});
+    var cnt=document.getElementById('cnt'),o={v:0};
+    tl.to(o,{v:14601,duration:3.19,ease:'power2.out',onUpdate:function(){cnt.textContent=Math.round(o.v).toLocaleString('en-US');}},5.55); // beat-locked: 14,601 lands 8.74s
+    tl.fromTo('#cnt',{opacity:0},{opacity:1,duration:.4},5.5);
+    up('#cap2',6.4,.6,18);
+
+    /* S3 */
+    tl.fromTo('#search',{opacity:0,x:-40},{opacity:1,x:0,duration:.6,ease:'power3.out'},10.0);
+    tl.fromTo('#screen',{opacity:0,x:40},{opacity:1,x:0,duration:.6,ease:'power3.out'},10.2);
+    tl.to('#ch1',{backgroundColor:'#1f6dd8',borderColor:'#6aa5ff',color:'#ffffff',duration:.15},10.93); // beat-grid: select 10.93 (strong cue)
+    tl.fromTo('#vbad',{opacity:0,y:16},{opacity:1,y:0,duration:.3,ease:'power3.out'},11.0);
+    tl.to('#vbad',{opacity:0,duration:.25},13.11);
+    tl.to('#ch1',{backgroundColor:'#262626',borderColor:'#3d3d3d',color:'#e0e0e0',duration:.15},13.11);
+    tl.to('#ch2',{backgroundColor:'#1f6dd8',borderColor:'#6aa5ff',color:'#ffffff',duration:.15},13.11); // beat-locked: 13.11s
+    tl.fromTo('#vgood',{opacity:0,y:16},{opacity:1,y:0,duration:.35,ease:'power3.out'},13.11);
+
+    /* S4 */
+    up('#t1',15.55,.55,18);up('#t2',16.55,.5,14);
+    chevs.forEach(function(c,i){tl.fromTo(c,{opacity:0,y:30},{opacity:i===0?.7:1,y:0,duration:.35,ease:'power2.out'},15.6+i*.17);});
+    tl.fromTo('#you',{opacity:0},{opacity:.0,duration:.1},15.6);
+    tl.fromTo(pin,{opacity:0,y:-110},{opacity:1,y:0,duration:.34,ease:'bounce.out'},17.47); // beat-locked: 17.47s
+
+    /* S5 */
+    up('#cap5',18.85,.5,14);
+    [['#hb1',19.10],['#hb2',19.66],['#hb3',20.19],['#hb4',20.75]].forEach(function(a){ // beat-grid: 19.10 / 19.66 / 20.19 / 20.75
+      tl.fromTo(a[0],{opacity:0,scale:1.12},{opacity:1,scale:1,duration:.28,ease:'power3.out'},a[1]);});
+
+    /* S6 */
+    tl.fromTo('#pin6',{opacity:0,y:-90},{opacity:1,y:0,duration:.4,ease:'bounce.out'},21.95);
+    tl.fromTo('#name',{opacity:0,y:20},{opacity:1,y:0,duration:.55,ease:'power3.out'},22.37); // beat-locked: 22.37s
+    tl.fromTo('#tag6',{opacity:0,y:16},{opacity:1,y:0,duration:.5,ease:'power3.out'},22.55);
+    tl.to('#cover',{opacity:1,duration:.3,ease:'none'},24.7);
+
+    /* audio-reactive: bass RMS (<220 Hz, from the bundled track) breathes the accent glow */
+    var R=[0.31, 0.44, 0.54, 0.5, 0.43, 0.35, 0.25, 0.18, 0.15, 0.11, 0.11, 0.09, 0.08, 0.07, 0.08, 0.06, 0.05, 0.04, 0.04, 0.02, 0.01, 0.0, 0.0, 0.05, 0.08, 0.11, 0.14, 0.15, 0.12, 0.09, 0.07, 0.05, 0.03, 0.03, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.05, 0.03, 0.02, 0.05, 0.08, 0.11, 0.14, 0.18, 0.17, 0.17, 0.17, 0.17, 0.16, 0.15, 0.12, 0.1, 0.09, 0.08, 0.07, 0.09, 0.09, 0.07, 0.06, 0.1, 0.13, 0.15, 0.19, 0.23, 0.24, 0.24, 0.24, 0.25, 0.24, 0.21, 0.18, 0.15, 0.13, 0.12, 0.1, 0.1, 0.11, 0.1, 0.09, 0.08, 0.06, 0.04, 0.03, 0.01, 0.1, 0.22, 0.32, 0.4, 0.44, 0.36, 0.26, 0.17, 0.1, 0.05, 0.04, 0.02, 0.03, 0.07, 0.11, 0.15, 0.18, 0.16, 0.12, 0.08, 0.09, 0.14, 0.19, 0.23, 0.26, 0.24, 0.18, 0.15, 0.12, 0.12, 0.12, 0.12, 0.1, 0.1, 0.09, 0.09, 0.08, 0.09, 0.08, 0.07, 0.06, 0.14, 0.25, 0.38, 0.48, 0.55, 0.51, 0.44, 0.33, 0.25, 0.18, 0.15, 0.1, 0.1, 0.09, 0.07, 0.06, 0.07, 0.05, 0.05, 0.05, 0.05, 0.03, 0.02, 0.01, 0.01, 0.05, 0.08, 0.11, 0.15, 0.15, 0.11, 0.09, 0.07, 0.04, 0.03, 0.02, 0.02, 0.03, 0.04, 0.05, 0.06, 0.06, 0.04, 0.03, 0.01, 0.05, 0.08, 0.11, 0.15, 0.18, 0.17, 0.17, 0.16, 0.16, 0.15, 0.14, 0.11, 0.1, 0.09, 0.08, 0.08, 0.1, 0.08, 0.06, 0.05, 0.09, 0.12, 0.15, 0.19, 0.23, 0.24, 0.24, 0.25, 0.26, 0.24, 0.21, 0.18, 0.16, 0.13, 0.12, 0.1, 0.11, 0.12, 0.1, 0.09, 0.09, 0.06, 0.04, 0.02, 0.01, 0.11, 0.22, 0.32, 0.41, 0.46, 0.37, 0.28, 0.18, 0.1, 0.05, 0.03, 0.02, 0.03, 0.07, 0.11, 0.15, 0.17, 0.15, 0.11, 0.07, 0.1, 0.15, 0.21, 0.26, 0.29, 0.25, 0.2, 0.15, 0.13, 0.12, 0.13, 0.12, 0.1, 0.1, 0.09, 0.08, 0.08, 0.1, 0.08, 0.07, 0.11, 0.35, 0.55, 0.69, 0.75, 0.78, 0.62, 0.5, 0.43, 0.43, 0.42, 0.41, 0.39, 0.4, 0.4, 0.4, 0.41, 0.53, 0.65, 0.73, 0.73, 0.72, 0.59, 0.45, 0.37, 0.36, 0.36, 0.37, 0.37, 0.37, 0.37, 0.35, 0.35, 0.44, 0.63, 0.74, 0.8, 0.79, 0.7, 0.53, 0.43, 0.39, 0.41, 0.41, 0.4, 0.38, 0.39, 0.4, 0.4, 0.4, 0.53, 0.65, 0.73, 0.72, 0.7, 0.57, 0.43, 0.33, 0.33, 0.34, 0.37, 0.4, 0.43, 0.46, 0.49, 0.48, 0.58, 0.73, 0.82, 0.81, 0.8, 0.7, 0.54, 0.44, 0.43, 0.43, 0.41, 0.4, 0.38, 0.37, 0.37, 0.36, 0.4, 0.53, 0.65, 0.7, 0.7, 0.64, 0.5, 0.37, 0.29, 0.35, 0.42, 0.49, 0.53, 0.58, 0.53, 0.49, 0.45, 0.57, 0.72, 0.8, 0.8, 0.8, 0.66, 0.51, 0.43, 0.43, 0.42, 0.43, 0.42, 0.43, 0.44, 0.45, 0.45, 0.53, 0.66, 0.75, 0.77, 0.75, 0.65, 0.51, 0.39, 0.35, 0.36, 0.36, 0.37, 0.38, 0.39, 0.4, 0.4, 0.42, 0.57, 0.71, 0.77, 0.78, 0.77, 0.62, 0.49, 0.43, 0.43, 0.41, 0.4, 0.4, 0.4, 0.4, 0.41, 0.41, 0.52, 0.66, 0.73, 0.73, 0.73, 0.59, 0.45, 0.37, 0.35, 0.37, 0.37, 0.37, 0.37, 0.37, 0.36, 0.36, 0.46, 0.65, 0.76, 0.81, 0.79, 0.67, 0.47, 0.36, 0.3, 0.32, 0.34, 0.34, 0.34, 0.36, 0.36, 0.37, 0.4, 0.53, 0.67, 0.74, 0.73, 0.7, 0.57, 0.44, 0.37, 0.38, 0.39, 0.41, 0.43, 0.44, 0.46, 0.51, 0.53, 0.64, 0.8, 0.85, 0.83, 0.8, 0.69, 0.55, 0.48, 0.47, 0.47, 0.45, 0.43, 0.42, 0.39, 0.38, 0.37, 0.43, 0.59, 0.69, 0.76, 0.75, 0.68, 0.52, 0.43, 0.36, 0.44, 0.52, 0.6, 0.65, 0.69, 0.63, 0.57, 0.51, 0.63, 0.74, 0.8, 0.78, 0.78, 0.63, 0.51, 0.46, 0.5, 0.5, 0.49, 0.47, 0.48, 0.49, 0.5, 0.47, 0.52, 0.52, 0.51, 0.53, 0.59, 0.51, 0.41, 0.33, 0.25, 0.2, 0.2, 0.22, 0.23, 0.23, 0.23, 0.22, 0.29, 0.51, 0.71, 0.82, 0.94, 1.0, 0.89, 0.75, 0.61, 0.47, 0.34, 0.2, 0.13, 0.15, 0.15, 0.13, 0.11, 0.33, 0.55, 0.69, 0.73, 0.73, 0.49, 0.24, 0.08, 0.03, 0.06, 0.09, 0.11, 0.14, 0.17, 0.17, 0.16, 0.33, 0.56, 0.71, 0.77, 0.76, 0.61, 0.38, 0.23, 0.18, 0.29, 0.37, 0.45, 0.52, 0.59, 0.58, 0.59, 0.62, 0.79, 0.89, 0.9, 0.82, 0.74, 0.54, 0.41, 0.39, 0.49, 0.59, 0.67, 0.73, 0.74, 0.72, 0.69, 0.65, 0.73, 0.86, 0.9, 0.86, 0.84, 0.73, 0.61, 0.57, 0.6, 0.56, 0.48, 0.38, 0.26, 0.16, 0.12, 0.1, 0.32, 0.58, 0.78, 0.86, 0.89, 0.69, 0.42, 0.2, 0.13, 0.26, 0.41, 0.53, 0.69, 0.8, 0.78, 0.75, 0.75, 0.87, 0.97, 0.95, 0.92, 0.9, 0.69, 0.46, 0.35, 0.38, 0.39, 0.48, 0.58, 0.71, 0.68, 0.7, 0.71, 0.81, 0.89, 0.91, 0.87, 0.81, 0.71, 0.62, 0.6, 0.62, 0.68, 0.71, 0.74, 0.74, 0.75, 0.75, 0.75, 0.76, 0.89, 0.97, 0.94, 0.89, 0.85, 0.72, 0.64, 0.65, 0.63, 0.56, 0.44, 0.32, 0.2, 0.12, 0.09, 0.08, 0.34, 0.57, 0.68, 0.72, 0.71, 0.44, 0.19, 0.07, 0.04, 0.07, 0.11, 0.14, 0.17, 0.16, 0.14, 0.12, 0.31, 0.54, 0.68, 0.76, 0.77, 0.58, 0.35, 0.22, 0.19, 0.3, 0.39, 0.49, 0.58, 0.64, 0.61, 0.6, 0.64, 0.76, 0.84, 0.84, 0.76, 0.66, 0.51, 0.41, 0.39, 0.51, 0.58, 0.64, 0.7, 0.73, 0.72, 0.71, 0.69, 0.78, 0.92, 0.92, 0.88, 0.84, 0.72, 0.58, 0.57, 0.58, 0.53, 0.44, 0.33, 0.22, 0.14, 0.11, 0.09, 0.28, 0.53, 0.69, 0.76, 0.78, 0.6, 0.36, 0.19, 0.14, 0.3, 0.39, 0.52, 0.63, 0.75, 0.56, 0.43];
+    for(var f=0;f<R.length;f++){tl.set('#glow',{opacity:+(0.10+0.16*R[f]).toFixed(3)},f/30);}
+
+    window.__timelines=window.__timelines||{};window.__timelines['root']=tl;
+  })();
+  </script>
+</div>
+</body>
+</html>
