@@ -1,0 +1,86 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Accessible Navigation brag</title>
+<style>html,body{margin:0;background:#121212}canvas{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const F='"Helvetica Neue",Helvetica,Arial,"Liberation Sans",sans-serif';
+const BG='#121212',TX='#E0E0E0',AC='#1f6dd8',GR='#30D158';
+const cl=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const ez=x=>1-Math.pow(1-cl(x),3);
+// alpha envelope: fade in over fi, hold, fade out over fo, between t0 and t1
+const env=(t,t0,t1,fi=.5,fo=.5)=>cl((t-t0)/fi)*cl((t1-t)/fo);
+function text(s,x,y,size,col,a,w=500,al='center'){g.save();g.globalAlpha=a;g.fillStyle=col;g.font=`${w} ${size}px ${F}`;g.textAlign=al;g.textBaseline='middle';g.fillText(s,x,y);g.restore();}
+function rr(x,y,w,h,r){g.beginPath();g.roundRect(x,y,w,h,r);}
+function chev(cx,cy,w,h,th,col,a){g.save();g.globalAlpha=a;g.strokeStyle=col;g.lineWidth=th;g.lineCap='round';g.lineJoin='round';g.beginPath();g.moveTo(cx-w/2,cy+h/2);g.lineTo(cx,cy-h/2);g.lineTo(cx+w/2,cy+h/2);g.stroke();g.restore();}
+
+function render(t){
+  g.globalAlpha=1;g.fillStyle=BG;g.fillRect(0,0,1920,1080);
+  // S1 hook 0-4
+  {const a1=env(t,0.2,4,.5,.5), a2=env(t,2.0,4,.5,.5);
+   text('Every map tells you where to turn.',960,470,72,TX,a1*(1-0));
+   text('None tell you about the step.',960,590,72,'#FF9F0A',a2,600);}
+  // S2 profiles 4-9
+  {const s=env(t,4,9,.5,.5);
+   text('Four mobility profiles. Different restrictions each.',960,230,52,TX,s,600);
+   const names=['None','Wheelchair','Cane','Walker'];
+   names.forEach((n,i)=>{const x=330+i*340,y=380,w=300,h=110;
+     const on=(i==1&&t>=5.2&&t<6.9)||(i==2&&t>=6.9);
+     const appear=ez((t-4.3-i*.15)/.4)*s;
+     g.save();g.globalAlpha=appear;rr(x,y,w,h,24);g.fillStyle=on?AC:'#242424';g.fill();g.restore();
+     text(n,x+w/2,y+h/2,40,on?'#fff':TX,appear,on?700:500);});
+   const v1=env(t,5.3,6.9,.3,.25), v2=env(t,7.0,9,.3,.5);
+   const cardA=Math.max(v1,v2)*s;
+   g.save();g.globalAlpha=cardA;rr(330,600,1260,250,28);g.fillStyle='#242424';g.fill();g.restore();
+   text('Steps with a handrail',960,670,40,'#bbb',cardA);
+   text('Not passable in a wheelchair',960,760,64,'#FF453A',v1*s,700);
+   text('Passable with a cane',960,760,64,GR,v2*s,700);}
+  // S3 AR chevrons 9-14
+  {const s=env(t,9,14,.5,.5);
+   if(s>0){g.save();g.globalAlpha=s;
+    // ground trapezoid
+    const hz=330;const grd=g.createLinearGradient(0,hz,0,1080);grd.addColorStop(0,'#1b1b1b');grd.addColorStop(1,'#2c2c2c');
+    g.fillStyle=grd;g.beginPath();g.moveTo(760,hz);g.lineTo(1160,hz);g.lineTo(1920,1080);g.lineTo(0,1080);g.fill();
+    g.strokeStyle='#3a3a3a';g.lineWidth=4;g.beginPath();g.moveTo(760,hz);g.lineTo(0,1080);g.moveTo(1160,hz);g.lineTo(1920,1080);g.stroke();g.restore();
+    const tt=t-9, walkerD=0.0; // walker at d=0 (bottom); chevrons ahead green, behind grey
+    for(let k=0;k<9;k++){
+      const d=(k+ (tt*0.9)%1) ; // world distance, scrolling toward walker
+      const p=1/(1+d*0.55); // perspective scale
+      const y=hz+(1080-hz)*Math.pow(p,1.0)*0.98;
+      const sc=p*1.9, w=420*sc, h=150*sc, th=Math.max(4,70*sc*0.35);
+      const reveal=cl((tt-0.4-k*.12)/.3);
+      const behind=d<0.6;
+      chev(960,y-h*0.2,w,h,th,behind?'#666':GR,s*reveal*(behind?.45:1)*cl(1.2-d/9));
+    }
+    // destination pin
+    const pa=ez((tt-1.6)/.6)*s, py=hz+50-ez((tt-1.6)/.6)*0;
+    g.save();g.globalAlpha=pa;g.fillStyle=AC;g.beginPath();g.arc(960,py-52,30,Math.PI*0.8,Math.PI*0.2,false);g.lineTo(960,py);g.closePath();g.fill();
+    g.fillStyle='#fff';g.beginPath();g.arc(960,py-60,11,0,7);g.fill();g.restore();
+    text('Guidance is geometry, not an overlay.',960,170,60,TX,s*ez((tt-.3)/.5),600);
+    text('Grey behind, green ahead.',960,250,40,'#9a9a9a',s*ez((tt-2.2)/.5));
+    text('Width is an admission, not a style.',960,1010,40,'#9a9a9a',s*ez((tt-3.2)/.5)*0.9);
+   }}
+  // S4 hazards 14-18
+  {const s=env(t,14,18,.5,.5);
+   text('Four hazards. Detected on-device at 10 Hz.',960,160,56,TX,s,600);
+   const hz=[['Pothole','#FF3B30',380,420,330,230],['Slippery surface','#0A84FF',1010,520,360,210],['Uneven surface','#FFD60A',520,700,400,200],['Pathway obstruction','#FF9F0A',1160,730,380,230]];
+   g.save();g.globalAlpha=s*.9;rr(260,260,1400,700,28);g.fillStyle='#1c1c1c';g.fill();g.restore();
+   hz.forEach((h,i)=>{const a=ez((t-14.5-i*.6)/.25)*s;if(a<=0)return;
+     const [n,c,x,y,w,hh]=h;const sc=1+(1-a)*.15;
+     g.save();g.globalAlpha=a;g.translate(x+w/2,y+hh/2);g.scale(sc,sc);
+     g.strokeStyle=c;g.lineWidth=7;rr(-w/2,-hh/2,w,hh,10);g.stroke();
+     g.fillStyle=c;rr(-w/2,-hh/2-52,Math.min(w,n.length*23+40),52,10);g.fill();g.restore();
+     text(n,x+ (Math.min(w,n.length*23+40))/2 -0,y-26,30,'#111',a,700);});
+  }
+  // S5 outro 18-20
+  {const s=cl((t-18)/.4);
+   if(t>=18){
+    g.save();g.globalAlpha=s;g.fillStyle=AC;g.beginPath();g.arc(960,300,52,Math.PI*0.8,Math.PI*0.2,false);g.lineTo(960,380);g.closePath();g.fill();g.fillStyle='#fff';g.beginPath();g.arc(960,285,19,0,7);g.fill();g.restore();
+    text('Accessible Navigation',960,520,96,TX,s*ez((t-18.2)/.5),700);
+    text('Know what the pavement is like, not just which way to turn.',960,640,40,'#9a9a9a',ez((t-18.7)/.5));
+    g.save();g.globalAlpha=cl((20-t)/.5)>0?0:0;g.restore();}
+  }
+  // global fade out
+  g.save();g.globalAlpha=cl((t-19.5)/.5);g.fillStyle=BG;g.fillRect(0,0,1920,1080);g.restore();
+}
+window.render=render;render(0);
+</script></body></html>
